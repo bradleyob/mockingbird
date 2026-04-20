@@ -25,10 +25,11 @@ final class ProfileLibraryTests: XCTestCase {
         let dMajor = cMajor.transposed(by: 2)
         XCTAssertEqual(dMajor.root, .d)
         XCTAssertEqual(dMajor.scaleName, "major")
-        // Rotation by 2: dMajor[i] == cMajor[(i + 2) % 12]
-        XCTAssertEqual(dMajor.weights[0], cMajor.weights[2], accuracy: 0.001)
-        XCTAssertEqual(dMajor.weights[2], cMajor.weights[4], accuracy: 0.001)
-        XCTAssertEqual(dMajor.weights[10], cMajor.weights[0], accuracy: 0.001)
+        // Right rotation by 2: dMajor[i] == cMajor[(i - 2 + 12) % 12]
+        // Tonic weight (highest, at C=0 in template) must land at D=2 in D major.
+        XCTAssertEqual(dMajor.weights[2], cMajor.weights[0], accuracy: 0.001) // tonic at D
+        XCTAssertEqual(dMajor.weights[4], cMajor.weights[2], accuracy: 0.001) // 2nd at E
+        XCTAssertEqual(dMajor.weights[0], cMajor.weights[10], accuracy: 0.001) // A# weight at C
     }
 
     func testEachScaleHas12Transpositions() {

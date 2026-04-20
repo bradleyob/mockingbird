@@ -61,10 +61,16 @@ public final class FFTProcessor {
         vDSP_vmul(samples, 1, window, 1, &windowed, 1, vDSP_Length(config.windowSize))
 
         // Pack N windowed real samples into N/2 complex values (interleaved → split).
-        // If zero-padding: windowed has windowSize samples; the upper half of the
-        // virtual N-sample frame is zeros — we only pack windowSize/2 pairs from
-        // windowed and leave realPart[windowSize/2...] and imagPart[windowSize/2...] as 0.
-        let packCount = vDSP_Length(min(halfN, config.windowSize / 2))
+        //
+        // `vDSP_ctoz` stride is in FLOAT units. Stride=2 means "read consecutive
+        // DSPComplex elements" — i.e. stride of 2 floats between real parts, which is
+        // the minimum valid (must be even). This produces:
+        //   realp[k] = windowed[2k], imagp[k] = windowed[2k+1]
+        //
+        // For zero-padding: only windowSize/2 pairs are populated from `windowed`;
+        // the remaining realPart[windowSize/2...] and imagPart[windowSize/2...] stay
+        // at zero (pre-allocated as zeros in init).
+        let packCount = vDSP_Length(config.windowSize / 2)
         windowed.withUnsafeBufferPointer { wPtr in
             wPtr.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: Int(packCount)) { cPtr in
                 realPart.withUnsafeMutableBufferPointer { rBuf in

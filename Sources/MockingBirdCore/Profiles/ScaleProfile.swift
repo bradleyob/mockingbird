@@ -32,10 +32,15 @@ public struct ScaleProfile: Equatable, Codable, Sendable {
     }
 
     /// Returns a new profile transposed by `semitones`, rotating the weight vector accordingly.
+    ///
+    /// Weights are indexed by absolute pitch class (0=C…11=B), so transposing by N
+    /// semitones means the tonic weight (currently at index 0 for C-rooted templates)
+    /// must shift RIGHT to index N. Right rotation: prepend the last N elements.
     public func transposed(by semitones: Int) -> ScaleProfile {
         let shift = ((semitones % 12) + 12) % 12
         guard shift != 0 else { return self }
-        let rotated = Array(weights[shift...] + weights[..<shift])
+        let split = 12 - shift
+        let rotated = Array(weights[split...] + weights[..<split])
         let newRoot = root.transposed(by: semitones)
         return ScaleProfile(
             name: "\(newRoot) \(scaleName)",
