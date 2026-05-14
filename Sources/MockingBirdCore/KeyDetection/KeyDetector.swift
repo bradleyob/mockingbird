@@ -2,9 +2,15 @@ import Accelerate
 
 /// Correlates a `ChromaVector` against a `ProfileLibrary` and returns a `KeyResult`.
 ///
-/// Uses Pearson correlation. Scores are normalized to [0, 1] by rescaling from
-/// [min_score, max_score] so that the winning profile always has confidence = 1
-/// and relative distances are preserved.
+/// Uses cosine similarity (dot product of two L2-normalized vectors).
+/// Both the chroma vector from `ChromaExtractor` and all profiles in `ProfileLibrary`
+/// are already L2-normalized, so the score reduces to a simple dot product in [−1, 1].
+/// This matches the Krumhansl-Schmuckler formulation and handles sparse chord input
+/// correctly — Pearson correlation subtracts the mean, which unfairly penalizes
+/// diatonic profiles when the input has only a few non-zero bins.
+///
+/// Scores are rescaled to [0, 1] by mapping [min, max] → [0, 1] so that confidence
+/// values are comparable across windows and relative distances are preserved.
 ///
 /// `detect(_:timestamp:)` is a pure function — no internal mutable state.
 public struct KeyDetector {
@@ -25,13 +31,12 @@ public struct KeyDetector {
     /// - Returns: Best-match `KeyResult` with up to `numAlternates` runners-up.
     public func detect(_ chroma: ChromaVector, timestamp: Double = 0) -> KeyResult {
         let scores = library.profiles.map { profile in
-            (profile: profile, score: pearsonCorrelation(chroma.bins, profile.weights))
+            (profile: profile, score: cosineSimilarity(chroma.bins, profile.weights))
         }
 
         let sorted = scores.sorted { $0.score > $1.score }
 
         guard let best = sorted.first else {
-            // Library was empty — this is an invariant violation caught at init.
             preconditionFailure("ProfileLibrary was empty at detection time")
         }
 
@@ -65,32 +70,10 @@ public struct KeyDetector {
 
     // MARK: - Private
 
-    /// Pearson correlation coefficient between two 12-element vectors.
-    private func pearsonCorrelation(_ x: [Float], _ y: [Float]) -> Float {
-        let n = vDSP_Length(12)
-
-        var xMean: Float = 0
-        var yMean: Float = 0
-        vDSP_meanv(x, 1, &xMean, n)
-        vDSP_meanv(y, 1, &yMean, n)
-
-        var xCentered = [Float](repeating: 0, count: 12)
-        var yCentered = [Float](repeating: 0, count: 12)
-        var negXMean = -xMean
-        var negYMean = -yMean
-        vDSP_vsadd(x, 1, &negXMean, &xCentered, 1, n)
-        vDSP_vsadd(y, 1, &negYMean, &yCentered, 1, n)
-
-        var dotProduct: Float = 0
-        vDSP_dotpr(xCentered, 1, yCentered, 1, &dotProduct, n)
-
-        var xSumSq: Float = 0
-        var ySumSq: Float = 0
-        vDSP_svesq(xCentered, 1, &xSumSq, n)
-        vDSP_svesq(yCentered, 1, &ySumSq, n)
-
-        let denominator = (xSumSq * ySumSq).squareRoot()
-        guard denominator > 0 else { return 0 }
-        return dotProduct / denominator
+    /// Cosine similarity of two L2-normalized 12-element vectors (= their dot product).
+    private func cosineSimilarity(_ x: [Float], _ y: [Float]) -> Float {
+        var result: Float = 0
+        vDSP_dotpr(x, 1, y, 1, &result, vDSP_Length(12))
+        return result
     }
 }
