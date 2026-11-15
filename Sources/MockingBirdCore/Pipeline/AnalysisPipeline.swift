@@ -7,9 +7,10 @@ import Foundation
 ///
 /// Usage:
 /// ```swift
-/// let pipeline = try AnalysisPipeline(source: avFoundationSource, config: .init())
-/// for try await result in pipeline.start() {
-///     print(result) // KeyResult
+/// let pipeline = try AnalysisPipeline(source: fileSource, aggregation: .cumulative)
+/// var last: KeyResult?
+/// for try await result in try await pipeline.start() {
+///     last = result // with .cumulative, the final result covers the whole input
 /// }
 /// ```
 public actor AnalysisPipeline {
@@ -19,10 +20,7 @@ public actor AnalysisPipeline {
     private let fft: FFTProcessor
     private let chroma: ChromaExtractor
     private let detector: KeyDetector
-
-    // Accumulation buffer for hop-based windowing
-    private var sampleBuffer: [Float] = []
-    private var streamStartTime: Date?
+    private var reader: Task<Void, Never>?
 
     /// - Parameters:
     ///   - source: Audio source providing raw PCM chunks.
@@ -36,6 +34,9 @@ public actor AnalysisPipeline {
         library: ProfileLibrary = .default,
         aggregation: ChromaAggregation = .cumulative
     ) throws {
+        if case .rolling(let windows) = aggregation {
+            precondition(windows >= 1, "rolling aggregation needs at least 1 window, got \(windows)")
+        }
         self.source = source
         self.config = config
         self.aggregation = aggregation
@@ -46,70 +47,87 @@ public actor AnalysisPipeline {
 
     /// Starts capture and returns an async stream of `KeyResult` values.
     ///
-    /// One `KeyResult` is emitted per analysis window (every `config.hopSize` samples).
-    /// The stream ends when the audio source stops or throws.
+    /// One `KeyResult` is emitted per hop once a full window is available, so an N-sample
+    /// input yields `(N - windowSize) / hopSize + 1` results (none if N < windowSize).
+    /// Each result's `timestamp` is the seconds of audio consumed at the end of its window,
+    /// `(windowIndex * hopSize + windowSize) / sampleRate`. The stream finishes when the
+    /// source finishes, and fails with `PipelineError` if the source fails. If the consumer
+    /// stops iterating, the reader is cancelled and the source stopped.
     ///
-    /// - Throws: `PipelineError` on DSP or audio source failure.
+    /// - Throws: `PipelineError` or `AudioSourceError` if the source cannot start.
     public func start() throws -> AsyncThrowingStream<KeyResult, Error> {
-        let stream = try source.start(sampleRate: config.sampleRate)
-        let capturedConfig = config
-        let capturedAggregation = aggregation
-        streamStartTime = Date()
-        let startTime = streamStartTime!
-
-        return AsyncThrowingStream { continuation in
-            Task {
-                do {
-                    var buffer: [Float] = []
-                    var accumulator = ChromaAccumulator(aggregation: capturedAggregation)
-
-                    for try await chunk in stream {
-                        buffer.append(contentsOf: chunk)
-
-                        while buffer.count >= capturedConfig.windowSize {
-                            let window = Array(buffer.prefix(capturedConfig.windowSize))
-                            buffer.removeFirst(capturedConfig.hopSize)
-
-                            let timestamp = Date().timeIntervalSince(startTime)
-                            let energy = self.chromaEnergy(window: window)
-                            let step = accumulator.adding(energy)
-                            accumulator = step.accumulator
-                            continuation.yield(self.detect(energy: step.aggregate, timestamp: timestamp))
-                        }
-                    }
-                    continuation.finish()
-                } catch let error as PipelineError {
-                    continuation.finish(throwing: error)
-                } catch let error as AudioSourceError {
-                    continuation.finish(throwing: PipelineError.audioSourceFailed(
-                        error,
-                        ErrorContext(operation: "audio stream", component: "AnalysisPipeline")
-                    ))
-                } catch {
-                    continuation.finish(throwing: PipelineError.pipelineStopped(
-                        ErrorContext(
-                            operation: "audio stream",
-                            component: "AnalysisPipeline",
-                            underlyingDescription: error.localizedDescription
-                        )
-                    ))
-                }
-            }
+        let audio = try source.start(sampleRate: config.sampleRate)
+        let (results, continuation) = AsyncThrowingStream<KeyResult, Error>.makeStream()
+        let task = Task { await self.run(audio, into: continuation) }
+        let source = self.source
+        continuation.onTermination = { _ in
+            task.cancel()
+            source.stop()
         }
+        reader = task
+        return results
     }
 
-    /// Stops audio capture.
+    /// Stops audio capture and ends the result stream.
     public func stop() {
         source.stop()
+        reader?.cancel()
     }
 
     // MARK: - Private
 
-    private func chromaEnergy(window: [Float]) -> [Float] {
-        chroma.extractEnergy(fft.process(window))
+    private func run(
+        _ audio: AsyncThrowingStream<[Float], Error>,
+        into continuation: AsyncThrowingStream<KeyResult, Error>.Continuation
+    ) async {
+        var buffer: [Float] = []
+        var windowStart = 0
+        var windowIndex = 0
+        var accumulator = ChromaAccumulator(aggregation: aggregation)
+
+        do {
+            for try await chunk in audio {
+                guard !Task.isCancelled else { break }
+                buffer.append(contentsOf: chunk)
+
+                while buffer.count - windowStart >= config.windowSize {
+                    let window = Array(buffer[windowStart..<(windowStart + config.windowSize)])
+                    let step = accumulator.adding(chroma.extractEnergy(fft.process(window)))
+                    accumulator = step.accumulator
+                    continuation.yield(detector.detect(
+                        chroma.normalized(step.aggregate),
+                        timestamp: timestamp(ofWindow: windowIndex)
+                    ))
+                    windowStart += config.hopSize
+                    windowIndex += 1
+                }
+                // Drop consumed samples once they outnumber a window, so the buffer
+                // stays small without shifting it on every hop.
+                if windowStart >= config.windowSize {
+                    buffer.removeFirst(windowStart)
+                    windowStart = 0
+                }
+            }
+            continuation.finish()
+        } catch let error as PipelineError {
+            continuation.finish(throwing: error)
+        } catch let error as AudioSourceError {
+            continuation.finish(throwing: PipelineError.audioSourceFailed(
+                error,
+                ErrorContext(operation: "audio stream", component: "AnalysisPipeline")
+            ))
+        } catch {
+            continuation.finish(throwing: PipelineError.pipelineStopped(
+                ErrorContext(
+                    operation: "audio stream",
+                    component: "AnalysisPipeline",
+                    underlyingDescription: String(describing: error)
+                )
+            ))
+        }
     }
 
-    private func detect(energy: [Float], timestamp: Double) -> KeyResult {
-        detector.detect(chroma.normalized(energy), timestamp: timestamp)
+    private func timestamp(ofWindow index: Int) -> Double {
+        Double(index * config.hopSize + config.windowSize) / config.sampleRate
     }
 }
