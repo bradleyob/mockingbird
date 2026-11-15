@@ -1,0 +1,850 @@
+diff --git a/.gitignore b/.gitignore
+index ee0b6bd..ea34af1 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -21,3 +21,9 @@ DerivedData/
+ .AppleDouble
+ .LSOverride
+ ._*
++
++# Linux (Docker) build directory
++.build-linux/
++
++# App bundle output
++build/
+diff --git a/Package.swift b/Package.swift
+index 7dfc7f8..12e1e7c 100644
+--- a/Package.swift
++++ b/Package.swift
+@@ -1,74 +1,137 @@
+ // swift-tools-version: 6.0
+ import PackageDescription
+ 
++// Apple-only targets (AVFoundation capture, SwiftUI app) are added to the manifest only
++// when building on macOS, so that a plain `swift build` / `swift test` succeeds on Linux.
++
++var products: [Product] = [
++    .library(name: "MockingBirdCore", targets: ["MockingBirdCore"]),
++    .executable(name: "mockingbird", targets: ["MockingBirdCLI"]),
++    .executable(name: "mockingbird-server", targets: ["MockingBirdServer"]),
++]
++
++var cliDependencies: [Target.Dependency] = [
++    "MockingBirdCore",
++    .target(name: "AudioSourceMiniAudio", condition: .when(platforms: [.linux])),
++]
++#if os(macOS)
++cliDependencies.append("AudioSourceAVFoundation")
++#endif
++
++var targets: [Target] = [
++    // MARK: - Core DSP library (compiles on Linux; Accelerate only behind canImport)
++    .target(
++        name: "MockingBirdCore",
++        path: "Sources/MockingBirdCore",
++        swiftSettings: [
++            .enableExperimentalFeature("StrictConcurrency"),
++        ]
++    ),
++
++    // MARK: - miniaudio (vendored single header + mb_ C bridge)
++    .target(
++        name: "CMiniAudio",
++        path: "Sources/CMiniAudio",
++        publicHeadersPath: "include",
++        cSettings: [
++            .headerSearchPath("../../Vendor/miniaudio"),
++        ],
++        linkerSettings: [
++            .linkedLibrary("m", .when(platforms: [.linux])),
++            .linkedLibrary("dl", .when(platforms: [.linux])),
++            .linkedLibrary("pthread", .when(platforms: [.linux])),
++            .linkedFramework("CoreFoundation", .when(platforms: [.macOS])),
++            .linkedFramework("CoreAudio", .when(platforms: [.macOS])),
++            .linkedFramework("AudioToolbox", .when(platforms: [.macOS])),
++        ]
++    ),
++    .target(
++        name: "AudioSourceMiniAudio",
++        dependencies: ["MockingBirdCore", "CMiniAudio"],
++        path: "Sources/AudioSourceMiniAudio"
++    ),
++
++    // MARK: - DSP CLI binary
++    .executableTarget(
++        name: "MockingBirdCLI",
++        dependencies: cliDependencies,
++        path: "Sources/MockingBirdCLI"
++    ),
++
++    // MARK: - HTTP/WebSocket gateway (no DSP, no MockingBirdCore)
++    .executableTarget(
++        name: "MockingBirdServer",
++        dependencies: [
++            .product(name: "Hummingbird", package: "hummingbird"),
++            .product(name: "HummingbirdWebSocket", package: "hummingbird-websocket"),
++        ],
++        path: "Sources/MockingBirdServer"
++    ),
++
++    // MARK: - Tests (Swift Testing)
++    .target(
++        name: "MockingBirdTestSupport",
++        dependencies: ["MockingBirdCore"],
++        path: "Tests/MockingBirdTestSupport"
++    ),
++    .testTarget(
++        name: "MockingBirdCoreTests",
++        dependencies: ["MockingBirdCore", "MockingBirdTestSupport"],
++        path: "Tests/MockingBirdCoreTests"
++    ),
++    .testTarget(
++        name: "MockingBirdCLITests",
++        dependencies: ["MockingBirdCLI", "MockingBirdTestSupport"],
++        path: "Tests/MockingBirdCLITests"
++    ),
++    .testTarget(
++        name: "MockingBirdServerTests",
++        dependencies: [
++            "MockingBirdServer",
++            "MockingBirdCLI",
++            "MockingBirdTestSupport",
++            .product(name: "HummingbirdTesting", package: "hummingbird"),
++            .product(name: "HummingbirdWSClient", package: "hummingbird-websocket"),
++        ],
++        path: "Tests/MockingBirdServerTests"
++    ),
++    .testTarget(
++        name: "MockingBirdMiniAudioTests",
++        dependencies: ["AudioSourceMiniAudio", "MockingBirdTestSupport"],
++        path: "Tests/MockingBirdMiniAudioTests"
++    ),
++]
++
++#if os(macOS)
++products.append(.executable(name: "MockingBirdApp", targets: ["MockingBirdApp"]))
++targets += [
++    .target(
++        name: "AudioSourceAVFoundation",
++        dependencies: ["MockingBirdCore"],
++        path: "Sources/AudioSourceAVFoundation"
++    ),
++    .executableTarget(
++        name: "MockingBirdApp",
++        dependencies: ["MockingBirdCore", "AudioSourceAVFoundation"],
++        path: "Sources/MockingBirdApp"
++    ),
++    .testTarget(
++        name: "MockingBirdAppTests",
++        dependencies: ["MockingBirdApp", "MockingBirdTestSupport"],
++        path: "Tests/MockingBirdAppTests"
++    ),
++]
++#endif
++
+ let package = Package(
+     name: "MockingBird",
+     platforms: [
+         .macOS(.v14),
+     ],
+-    products: [
+-        .library(name: "MockingBirdCore", targets: ["MockingBirdCore"]),
+-        .executable(name: "mockingbird", targets: ["MockingBirdCLI"]),
+-        .executable(name: "mockingbird-server", targets: ["MockingBirdServer"]),
+-    ],
++    products: products,
+     dependencies: [
+         .package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.0.0"),
+         .package(url: "https://github.com/hummingbird-project/hummingbird-websocket.git", from: "2.0.0"),
+     ],
+-    targets: [
+-        // MARK: - Core DSP library (no platform imports, compiles on Linux)
+-        .target(
+-            name: "MockingBirdCore",
+-            path: "Sources/MockingBirdCore",
+-            swiftSettings: [
+-                .enableExperimentalFeature("StrictConcurrency"),
+-            ]
+-        ),
+-
+-        // MARK: - Platform audio sources
+-        .target(
+-            name: "AudioSourceAVFoundation",
+-            dependencies: ["MockingBirdCore"],
+-            path: "Sources/AudioSourceAVFoundation"
+-        ),
+-        .target(
+-            name: "AudioSourceMiniAudio",
+-            dependencies: ["MockingBirdCore"],
+-            path: "Sources/AudioSourceMiniAudio",
+-            publicHeadersPath: "include"
+-        ),
+-
+-        // MARK: - DSP CLI binary
+-        .executableTarget(
+-            name: "MockingBirdCLI",
+-            dependencies: [
+-                "MockingBirdCore",
+-                .target(name: "AudioSourceAVFoundation", condition: .when(platforms: [.macOS, .iOS])),
+-                .target(name: "AudioSourceMiniAudio", condition: .when(platforms: [.linux])),
+-            ],
+-            path: "Sources/MockingBirdCLI"
+-        ),
+-
+-        // MARK: - HTTP/WebSocket gateway (no DSP, no MockingBirdCore)
+-        .executableTarget(
+-            name: "MockingBirdServer",
+-            dependencies: [
+-                .product(name: "Hummingbird", package: "hummingbird"),
+-                .product(name: "HummingbirdWebSocket", package: "hummingbird-websocket"),
+-            ],
+-            path: "Sources/MockingBirdServer"
+-        ),
+-
+-        // MARK: - Tests
+-        .testTarget(
+-            name: "MockingBirdCoreTests",
+-            dependencies: ["MockingBirdCore"],
+-            path: "Tests/MockingBirdCoreTests"
+-        ),
+-        .testTarget(
+-            name: "MockingBirdCLITests",
+-            dependencies: ["MockingBirdCLI"],
+-            path: "Tests/MockingBirdCLITests"
+-        ),
+-    ]
++    targets: targets
+ )
+diff --git a/Sources/.DS_Store b/Sources/.DS_Store
+deleted file mode 100644
+index bb48aa2ba94bb21530087b0d3181804fd4f2873d..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 6148
+zcmeHKO-sW-5PhRP6a?u_kNX$=2QgMb&{M&)nn)2#0@dDg^Kbj+Lv2aDde9k|ec9Q0
+zJLDZQ830mm+B0AVU`kiSyDnqXbM=uOL_|^Sjvfp2*kFxjl)XQo+!LIW)8d)jZ~hab
+zcet|qI-Wk@%`&?7wOKv({fZ@Vj9Vr&c;QipC2HcD$rrf6^>*U^>KRQ1Qh`(;6-WjC
+zp90!IY11ReTvLHmAQkvhK)(-#u2=;Qj`r!`Vj}=?!mt^iZI&Pw4G^oq!I2S~IF;yB
+zi4jAb&UlHuDsXUgI>ajTo~SG_p@>yyyjVJ<a?CXqNCkEkIP~pI`~M~Vhxvb(l)F?Q
+z75GyM$Yj2l*L<but)rLIUR&t*^iN~1rE{@XOte<ajke;`t-PYoJg))=N24=tbYlJp
+Ms4i)#z;7t<0a=S8NdN!<
+
+diff --git a/Sources/AudioSourceAVFoundation/AVFoundationFileSource.swift b/Sources/AudioSourceAVFoundation/AVFoundationFileSource.swift
+new file mode 100644
+index 0000000..fb44f99
+--- /dev/null
++++ b/Sources/AudioSourceAVFoundation/AVFoundationFileSource.swift
+@@ -0,0 +1,21 @@
++import Foundation
++import MockingBirdCore
++
++/// Decodes an audio file (WAV / AIFF / M4A / MP3 / anything `AVAudioFile` reads) and
++/// delivers mono Float32 at the requested sample rate.
++///
++/// Phase 0 contract stub — Track B (MB-20) implements the body. The public signatures
++/// below are frozen: the macOS app (Track D) compiles against them.
++public struct AVFoundationFileSource: AudioSource {
++    private let url: URL
++
++    public init(url: URL) {
++        self.url = url
++    }
++
++    public func start(sampleRate: Double) throws -> AsyncThrowingStream<[Float], Error> {
++        throw AudioSourceError.formatUnsupported
++    }
++
++    public func stop() {}
++}
+diff --git a/Sources/AudioSourceMiniAudio/MiniAudioFileSource.swift b/Sources/AudioSourceMiniAudio/MiniAudioFileSource.swift
+new file mode 100644
+index 0000000..b30a821
+--- /dev/null
++++ b/Sources/AudioSourceMiniAudio/MiniAudioFileSource.swift
+@@ -0,0 +1,21 @@
++import Foundation
++import MockingBirdCore
++
++/// Decodes an audio file (WAV / FLAC / MP3) with miniaudio's built-in decoders and
++/// delivers mono Float32 at the requested sample rate.
++///
++/// Phase 0 contract stub — Track C (MB-20) implements the body. The public signatures
++/// below are frozen: the CLI (Track B) compiles against them on Linux.
++public struct MiniAudioFileSource: AudioSource {
++    private let url: URL
++
++    public init(url: URL) {
++        self.url = url
++    }
++
++    public func start(sampleRate: Double) throws -> AsyncThrowingStream<[Float], Error> {
++        throw AudioSourceError.formatUnsupported
++    }
++
++    public func stop() {}
++}
+diff --git a/Sources/AudioSourceMiniAudio/MiniAudioSource.swift b/Sources/AudioSourceMiniAudio/MiniAudioSource.swift
+index 1c34cbf..4cdb1c0 100644
+--- a/Sources/AudioSourceMiniAudio/MiniAudioSource.swift
++++ b/Sources/AudioSourceMiniAudio/MiniAudioSource.swift
+@@ -1,20 +1,26 @@
+ import MockingBirdCore
+ 
+-/// Stub: Linux/POSIX microphone capture via the vendored miniaudio C library.
++/// Microphone capture via the vendored miniaudio C library (Linux/POSIX; also builds on macOS).
+ ///
+-/// Full implementation will call `mb_device_init` / `mb_device_start` via the
+-/// C bridge in `Sources/AudioSourceMiniAudio/miniaudio_bridge.c`.
+-/// The data callback posts chunks to the stream continuation via a lock-free ring buffer
+-/// pre-allocated at init so the callback path never allocates.
++/// Phase 0 contract stub — Track C (MB-11) implements the body. The public signatures
++/// below are frozen: the CLI (Track B) compiles against them.
+ public final class MiniAudioSource: AudioSource {
+-    public init() {}
++    private let deviceName: String?
+ 
+-    public func start(sampleRate: Double) throws -> AsyncThrowingStream<[Float], Error> {
+-        // TODO: MB-11 — implement miniaudio device init and real-time callback bridge
++    /// - Parameter deviceName: Capture device to open, matched by name. `nil` or
++    ///   `"default"` selects the system default input.
++    public init(deviceName: String? = nil) {
++        self.deviceName = deviceName
++    }
++
++    /// Names of the capture devices miniaudio can see, in enumeration order.
++    public static func inputDeviceNames() throws -> [String] {
+         throw AudioSourceError.deviceUnavailable
+     }
+ 
+-    public func stop() {
+-        // TODO: MB-11 — stop and destroy ma_device
++    public func start(sampleRate: Double) throws -> AsyncThrowingStream<[Float], Error> {
++        throw AudioSourceError.deviceUnavailable
+     }
++
++    public func stop() {}
+ }
+diff --git a/Sources/AudioSourceMiniAudio/include/miniaudio_bridge.h b/Sources/CMiniAudio/include/miniaudio_bridge.h
+similarity index 68%
+rename from Sources/AudioSourceMiniAudio/include/miniaudio_bridge.h
+rename to Sources/CMiniAudio/include/miniaudio_bridge.h
+index 8958d44..4cff8a7 100644
+--- a/Sources/AudioSourceMiniAudio/include/miniaudio_bridge.h
++++ b/Sources/CMiniAudio/include/miniaudio_bridge.h
+@@ -5,8 +5,9 @@
+ extern "C" {
+ #endif
+ 
+-// TODO: MB-11 — declare mb_device_init, mb_device_start, mb_device_stop
++// Phase 0 placeholder. Track C (MB-11) declares the real mb_ API here.
+ // All project C functions use the mb_ prefix per coding contract.
++int mb_bridge_placeholder(void);
+ 
+ #ifdef __cplusplus
+ }
+diff --git a/Sources/CMiniAudio/miniaudio_bridge.c b/Sources/CMiniAudio/miniaudio_bridge.c
+new file mode 100644
+index 0000000..34e5ec4
+--- /dev/null
++++ b/Sources/CMiniAudio/miniaudio_bridge.c
+@@ -0,0 +1,7 @@
++#include "miniaudio_bridge.h"
++
++// Phase 0 placeholder. Track C (MB-11) vendors miniaudio.h into Vendor/miniaudio and
++// implements the mb_-prefixed bridge here.
++int mb_bridge_placeholder(void) {
++  return 0;
++}
+diff --git a/Sources/MockingBirdApp/MockingBirdApp.swift b/Sources/MockingBirdApp/MockingBirdApp.swift
+new file mode 100644
+index 0000000..70264f2
+--- /dev/null
++++ b/Sources/MockingBirdApp/MockingBirdApp.swift
+@@ -0,0 +1,12 @@
++import SwiftUI
++
++/// Phase 0 placeholder for the macOS app. Track D (MB-22) replaces this.
++@main
++struct MockingBirdApp: App {
++    var body: some Scene {
++        WindowGroup("MockingBird") {
++            Text("MockingBird")
++                .frame(minWidth: 360, minHeight: 240)
++        }
++    }
++}
+diff --git a/Sources/MockingBirdCore/Models/ChromaAggregation.swift b/Sources/MockingBirdCore/Models/ChromaAggregation.swift
+new file mode 100644
+index 0000000..8050e38
+--- /dev/null
++++ b/Sources/MockingBirdCore/Models/ChromaAggregation.swift
+@@ -0,0 +1,14 @@
++/// How `AnalysisPipeline` combines per-window chroma before each key detection pass.
++///
++/// A single 4096-sample window (~93 ms) rarely contains enough of a piece to identify
++/// its key, so the pipeline detects against chroma accumulated over time. One
++/// `KeyResult` is still emitted per hop in every mode.
++public enum ChromaAggregation: Equatable, Codable, Sendable {
++    /// Each result reflects only its own analysis window.
++    case perWindow
++    /// Each result reflects every window since the stream started. The last result
++    /// of a finite stream is therefore the result for the whole input.
++    case cumulative
++    /// Each result reflects the most recent `windows` analysis windows.
++    case rolling(windows: Int)
++}
+diff --git a/Sources/MockingBirdCore/Pipeline/AnalysisPipeline.swift b/Sources/MockingBirdCore/Pipeline/AnalysisPipeline.swift
+index 70cf2f4..e99f8fd 100644
+--- a/Sources/MockingBirdCore/Pipeline/AnalysisPipeline.swift
++++ b/Sources/MockingBirdCore/Pipeline/AnalysisPipeline.swift
+@@ -15,6 +15,7 @@ import Foundation
+ public actor AnalysisPipeline {
+     private let source: any AudioSource
+     private let config: AudioConfig
++    private let aggregation: ChromaAggregation
+     private let fft: FFTProcessor
+     private let chroma: ChromaExtractor
+     private let detector: KeyDetector
+@@ -27,14 +28,18 @@ public actor AnalysisPipeline {
+     ///   - source: Audio source providing raw PCM chunks.
+     ///   - config: Pipeline configuration. Defaults to standard 44100/4096.
+     ///   - library: Profile library for key detection. Defaults to built-in set.
++    ///   - aggregation: How chroma is combined across windows before detection.
+     /// - Throws: `PipelineError.fftSetupFailed` if the FFT transform cannot be allocated.
+     public init(
+         source: any AudioSource,
+         config: AudioConfig = AudioConfig(),
+-        library: ProfileLibrary = .default
++        library: ProfileLibrary = .default,
++        aggregation: ChromaAggregation = .cumulative
+     ) throws {
+         self.source = source
+         self.config = config
++        // Phase 0 contract stub: stored but not yet honoured (Track A, MB-21).
++        self.aggregation = aggregation
+         self.fft = try FFTProcessor(config: config)
+         self.chroma = ChromaExtractor(config: config)
+         self.detector = KeyDetector(library: library, numAlternates: config.numAlternates)
+diff --git a/Tests/MockingBirdAppTests/PlaceholderAppTests.swift b/Tests/MockingBirdAppTests/PlaceholderAppTests.swift
+new file mode 100644
+index 0000000..5428f44
+--- /dev/null
++++ b/Tests/MockingBirdAppTests/PlaceholderAppTests.swift
+@@ -0,0 +1,6 @@
++import Testing
++
++// Phase 0 placeholder so the test target compiles. The owning track replaces this file.
++@Test func placeholderAppTargetBuilds() {
++    #expect(Bool(true))
++}
+diff --git a/Tests/MockingBirdCLITests/MockingBirdCLITests.swift b/Tests/MockingBirdCLITests/MockingBirdCLITests.swift
+deleted file mode 100644
+index a5e462c..0000000
+--- a/Tests/MockingBirdCLITests/MockingBirdCLITests.swift
++++ /dev/null
+@@ -1,5 +0,0 @@
+-import XCTest
+-
+-// CLI integration tests go here (Sprint 2+).
+-// Sprint 1 validation lives in MockingBirdCoreTests.
+-final class MockingBirdCLITests: XCTestCase {}
+diff --git a/Tests/MockingBirdCLITests/PlaceholderCLITests.swift b/Tests/MockingBirdCLITests/PlaceholderCLITests.swift
+new file mode 100644
+index 0000000..8f284c0
+--- /dev/null
++++ b/Tests/MockingBirdCLITests/PlaceholderCLITests.swift
+@@ -0,0 +1,9 @@
++import Foundation
++import MockingBirdTestSupport
++import Testing
++
++// Phase 0 placeholder so the test target compiles. Track B replaces this file.
++@Test func placeholderCLITargetBuildsAndBinaryIsLocatable() throws {
++    let binary = try BuiltProducts.executable("mockingbird")
++    #expect(FileManager.default.isExecutableFile(atPath: binary.path))
++}
+diff --git a/Tests/MockingBirdCoreTests/AnalysisPipelineTests.swift b/Tests/MockingBirdCoreTests/AnalysisPipelineTests.swift
+index d2b7c52..9090c98 100644
+--- a/Tests/MockingBirdCoreTests/AnalysisPipelineTests.swift
++++ b/Tests/MockingBirdCoreTests/AnalysisPipelineTests.swift
+@@ -1,3 +1,6 @@
++// Phase 0: XCTest is unavailable with Command Line Tools only. Track A (MB-18) migrates
++// this file to Swift Testing and removes this guard.
++#if canImport(XCTest)
+ import XCTest
+ @testable import MockingBirdCore
+ 
+@@ -192,3 +195,4 @@ struct SyntheticSource: AudioSource {
+ 
+     func stop() {}
+ }
++#endif
+diff --git a/Tests/MockingBirdCoreTests/ChromaExtractorTests.swift b/Tests/MockingBirdCoreTests/ChromaExtractorTests.swift
+index d9dfb5a..0e76222 100644
+--- a/Tests/MockingBirdCoreTests/ChromaExtractorTests.swift
++++ b/Tests/MockingBirdCoreTests/ChromaExtractorTests.swift
+@@ -1,3 +1,6 @@
++// Phase 0: XCTest is unavailable with Command Line Tools only. Track A (MB-18) migrates
++// this file to Swift Testing and removes this guard.
++#if canImport(XCTest)
+ import XCTest
+ @testable import MockingBirdCore
+ 
+@@ -48,3 +51,4 @@ final class ChromaExtractorTests: XCTestCase {
+         }
+     }
+ }
++#endif
+diff --git a/Tests/MockingBirdCoreTests/FFTProcessorTests.swift b/Tests/MockingBirdCoreTests/FFTProcessorTests.swift
+index 8afcfd5..4c17167 100644
+--- a/Tests/MockingBirdCoreTests/FFTProcessorTests.swift
++++ b/Tests/MockingBirdCoreTests/FFTProcessorTests.swift
+@@ -1,3 +1,6 @@
++// Phase 0: XCTest is unavailable with Command Line Tools only. Track A (MB-18) migrates
++// this file to Swift Testing and removes this guard.
++#if canImport(XCTest)
+ import XCTest
+ @testable import MockingBirdCore
+ 
+@@ -44,3 +47,4 @@ final class FFTProcessorTests: XCTestCase {
+         }
+     }
+ }
++#endif
+diff --git a/Tests/MockingBirdCoreTests/KeyDetectorTests.swift b/Tests/MockingBirdCoreTests/KeyDetectorTests.swift
+index 881983d..ed1032e 100644
+--- a/Tests/MockingBirdCoreTests/KeyDetectorTests.swift
++++ b/Tests/MockingBirdCoreTests/KeyDetectorTests.swift
+@@ -1,3 +1,6 @@
++// Phase 0: XCTest is unavailable with Command Line Tools only. Track A (MB-18) migrates
++// this file to Swift Testing and removes this guard.
++#if canImport(XCTest)
+ import XCTest
+ @testable import MockingBirdCore
+ 
+@@ -55,3 +58,4 @@ final class KeyDetectorTests: XCTestCase {
+         XCTAssertEqual(minorProfiles.count, 12)
+     }
+ }
++#endif
+diff --git a/Tests/MockingBirdCoreTests/ProfileLibraryTests.swift b/Tests/MockingBirdCoreTests/ProfileLibraryTests.swift
+index f691e4a..b5a5ad3 100644
+--- a/Tests/MockingBirdCoreTests/ProfileLibraryTests.swift
++++ b/Tests/MockingBirdCoreTests/ProfileLibraryTests.swift
+@@ -1,3 +1,6 @@
++// Phase 0: XCTest is unavailable with Command Line Tools only. Track A (MB-18) migrates
++// this file to Swift Testing and removes this guard.
++#if canImport(XCTest)
+ import XCTest
+ @testable import MockingBirdCore
+ 
+@@ -40,3 +43,4 @@ final class ProfileLibraryTests: XCTestCase {
+         }
+     }
+ }
++#endif
+diff --git a/Tests/MockingBirdMiniAudioTests/PlaceholderMiniAudioTests.swift b/Tests/MockingBirdMiniAudioTests/PlaceholderMiniAudioTests.swift
+new file mode 100644
+index 0000000..f3f8c63
+--- /dev/null
++++ b/Tests/MockingBirdMiniAudioTests/PlaceholderMiniAudioTests.swift
+@@ -0,0 +1,6 @@
++import Testing
++
++// Phase 0 placeholder so the test target compiles. The owning track replaces this file.
++@Test func placeholderMiniAudioTargetBuilds() {
++    #expect(Bool(true))
++}
+diff --git a/Tests/MockingBirdServerTests/PlaceholderServerTests.swift b/Tests/MockingBirdServerTests/PlaceholderServerTests.swift
+new file mode 100644
+index 0000000..cf65c49
+--- /dev/null
++++ b/Tests/MockingBirdServerTests/PlaceholderServerTests.swift
+@@ -0,0 +1,6 @@
++import Testing
++
++// Phase 0 placeholder so the test target compiles. The owning track replaces this file.
++@Test func placeholderServerTargetBuilds() {
++    #expect(Bool(true))
++}
+diff --git a/Tests/MockingBirdTestSupport/AudioFixture.swift b/Tests/MockingBirdTestSupport/AudioFixture.swift
+new file mode 100644
+index 0000000..84df97b
+--- /dev/null
++++ b/Tests/MockingBirdTestSupport/AudioFixture.swift
+@@ -0,0 +1,50 @@
++import Foundation
++
++/// Serializes test signals into the byte formats the CLI and server accept.
++public enum AudioFixture {
++    /// Raw mono Float32 little-endian PCM — the `mockingbird` stdin / `.raw` format.
++    public static func rawFloat32(_ samples: [Float]) -> Data {
++        var data = Data(capacity: samples.count * 4)
++        for sample in samples {
++            withUnsafeBytes(of: sample.bitPattern.littleEndian) { data.append(contentsOf: $0) }
++        }
++        return data
++    }
++
++    /// A canonical 44-byte-header RIFF/WAVE file: mono, 16-bit signed PCM.
++    public static func wav16(_ samples: [Float], sampleRate: Int = 44100) -> Data {
++        let dataBytes = UInt32(samples.count * 2)
++        var data = Data(capacity: 44 + samples.count * 2)
++        func append<T: FixedWidthInteger>(_ value: T) {
++            withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) }
++        }
++        data.append(contentsOf: Array("RIFF".utf8))
++        append(UInt32(36) + dataBytes)
++        data.append(contentsOf: Array("WAVE".utf8))
++        data.append(contentsOf: Array("fmt ".utf8))
++        append(UInt32(16))                 // fmt chunk size
++        append(UInt16(1))                  // PCM
++        append(UInt16(1))                  // mono
++        append(UInt32(sampleRate))
++        append(UInt32(sampleRate * 2))     // byte rate
++        append(UInt16(2))                  // block align
++        append(UInt16(16))                 // bits per sample
++        data.append(contentsOf: Array("data".utf8))
++        append(dataBytes)
++        for sample in samples {
++            let clamped = max(-1, min(1, sample))
++            append(Int16((clamped * 32767).rounded()))
++        }
++        return data
++    }
++
++    /// Writes `data` to a uniquely named file in the temporary directory and returns its URL.
++    /// The caller removes it.
++    public static func writeTemporary(_ data: Data, fileExtension: String) throws -> URL {
++        let url = FileManager.default.temporaryDirectory
++            .appendingPathComponent("mockingbird-test-\(UUID().uuidString)")
++            .appendingPathExtension(fileExtension)
++        try data.write(to: url)
++        return url
++    }
++}
+diff --git a/Tests/MockingBirdTestSupport/BuiltProducts.swift b/Tests/MockingBirdTestSupport/BuiltProducts.swift
+new file mode 100644
+index 0000000..d96b8a2
+--- /dev/null
++++ b/Tests/MockingBirdTestSupport/BuiltProducts.swift
+@@ -0,0 +1,47 @@
++import Foundation
++
++/// Locates executables built by this package (`mockingbird`, `mockingbird-server`) so
++/// integration tests can run the real binaries.
++///
++/// A test target must list the executable's target as a dependency so SwiftPM builds it
++/// before the tests run.
++public enum BuiltProducts {
++    public struct NotFound: Error, CustomStringConvertible {
++        public let name: String
++        public let searched: [String]
++        public var description: String {
++            "built product '\(name)' not found; searched: \(searched.joined(separator: ", "))"
++        }
++    }
++
++    /// URL of the built executable `name`. Set `MOCKINGBIRD_BIN_DIR` to override the search.
++    public static func executable(_ name: String) throws -> URL {
++        let candidates = candidateDirectories()
++        for directory in candidates {
++            let url = directory.appendingPathComponent(name)
++            if FileManager.default.isExecutableFile(atPath: url.path) {
++                return url
++            }
++        }
++        throw NotFound(name: name, searched: candidates.map(\.path))
++    }
++
++    private static func candidateDirectories() -> [URL] {
++        var directories: [URL] = []
++        if let override = ProcessInfo.processInfo.environment["MOCKINGBIRD_BIN_DIR"] {
++            directories.append(URL(fileURLWithPath: override))
++        }
++        // The image containing this code is the test bundle binary, which SwiftPM places in
++        // (Linux) or a few levels below (macOS .xctest bundle) the products directory.
++        var info = Dl_info()
++        if dladdr(#dsohandle, &info) != 0, let imagePath = info.dli_fname {
++            var directory = URL(fileURLWithPath: String(cString: imagePath)).deletingLastPathComponent()
++            for _ in 0..<5 {
++                directories.append(directory)
++                directory = directory.deletingLastPathComponent()
++            }
++        }
++        directories.append(Bundle.main.bundleURL)
++        return directories
++    }
++}
+diff --git a/Tests/MockingBirdTestSupport/SyntheticSource.swift b/Tests/MockingBirdTestSupport/SyntheticSource.swift
+new file mode 100644
+index 0000000..b4ddcb9
+--- /dev/null
++++ b/Tests/MockingBirdTestSupport/SyntheticSource.swift
+@@ -0,0 +1,29 @@
++import MockingBirdCore
++
++/// An `AudioSource` that delivers a pre-computed sample buffer in fixed-size chunks,
++/// then finishes. Deterministic; no hardware required.
++public struct SyntheticSource: AudioSource {
++    public let samples: [Float]
++    public let chunkSize: Int
++
++    public init(samples: [Float], chunkSize: Int = 4096) {
++        self.samples = samples
++        self.chunkSize = max(chunkSize, 1)
++    }
++
++    public func start(sampleRate: Double) throws -> AsyncThrowingStream<[Float], Error> {
++        let allSamples = samples
++        let size = chunkSize
++        return AsyncThrowingStream { continuation in
++            var offset = 0
++            while offset < allSamples.count {
++                let end = min(offset + size, allSamples.count)
++                continuation.yield(Array(allSamples[offset..<end]))
++                offset = end
++            }
++            continuation.finish()
++        }
++    }
++
++    public func stop() {}
++}
+diff --git a/Tests/MockingBirdTestSupport/ToneSynth.swift b/Tests/MockingBirdTestSupport/ToneSynth.swift
+new file mode 100644
+index 0000000..0da7ad2
+--- /dev/null
++++ b/Tests/MockingBirdTestSupport/ToneSynth.swift
+@@ -0,0 +1,103 @@
++import Foundation
++
++/// Deterministic test-signal generator. Notes are MIDI numbers (60 = C4, 69 = A4 = 440 Hz).
++///
++/// Every note is rendered as a fundamental plus `harmonics - 1` overtones at 1/h amplitude,
++/// with a short fade in/out so that concatenated notes do not click.
++public enum ToneSynth {
++    public static let majorSteps = [0, 2, 4, 5, 7, 9, 11]
++    public static let naturalMinorSteps = [0, 2, 3, 5, 7, 8, 10]
++
++    public static func frequency(midi: Int) -> Double {
++        440 * pow(2, Double(midi - 69) / 12)
++    }
++
++    /// Simultaneous notes (a chord, or a single tone) lasting `duration` seconds, peak-normalized.
++    public static func chord(
++        _ notes: [Int],
++        harmonics: Int = 3,
++        sampleRate: Double = 44100,
++        duration: Double = 1.0
++    ) -> [Float] {
++        let count = Int(sampleRate * duration)
++        guard count > 0, !notes.isEmpty else { return [] }
++        var samples = [Float](repeating: 0, count: count)
++        for note in notes {
++            let fundamental = frequency(midi: note)
++            for harmonic in 1...max(harmonics, 1) {
++                let step = 2 * Double.pi * fundamental * Double(harmonic) / sampleRate
++                let amplitude = 1 / Double(harmonic)
++                for index in 0..<count {
++                    samples[index] += Float(amplitude * sin(step * Double(index)))
++                }
++            }
++        }
++        let peak = samples.map(abs).max() ?? 0
++        if peak > 0 {
++            samples = samples.map { $0 / peak }
++        }
++        let fade = min(400, count / 4)
++        for index in 0..<fade {
++            let gain = Float(index) / Float(fade)
++            samples[index] *= gain
++            samples[count - 1 - index] *= gain
++        }
++        return samples
++    }
++
++    /// Chords played one after another, `chordDuration` seconds each.
++    public static func progression(
++        _ chords: [[Int]],
++        harmonics: Int = 3,
++        sampleRate: Double = 44100,
++        chordDuration: Double = 1.0
++    ) -> [Float] {
++        chords.flatMap { chord($0, harmonics: harmonics, sampleRate: sampleRate, duration: chordDuration) }
++    }
++
++    /// Single notes played one after another, `noteDuration` seconds each.
++    public static func melody(
++        _ notes: [Int],
++        harmonics: Int = 4,
++        sampleRate: Double = 44100,
++        noteDuration: Double = 0.25
++    ) -> [Float] {
++        notes.flatMap { chord([$0], harmonics: harmonics, sampleRate: sampleRate, duration: noteDuration) }
++    }
++
++    /// Root-position triad on `root`.
++    public static func triad(root: Int, minor: Bool) -> [Int] {
++        [root, root + (minor ? 3 : 4), root + 7]
++    }
++
++    /// I–IV–V–I in the major key on `root` (4 s at the default chord duration).
++    public static func majorCadence(root: Int, sampleRate: Double = 44100) -> [Float] {
++        progression(
++            [triad(root: root, minor: false), triad(root: root + 5, minor: false),
++             triad(root: root + 7, minor: false), triad(root: root, minor: false)],
++            sampleRate: sampleRate
++        )
++    }
++
++    /// i–iv–v–i (natural minor) or i–iv–V–i (`harmonicDominant`) on `root`.
++    public static func minorCadence(
++        root: Int,
++        harmonicDominant: Bool = false,
++        sampleRate: Double = 44100
++    ) -> [Float] {
++        progression(
++            [triad(root: root, minor: true), triad(root: root + 5, minor: true),
++             triad(root: root + 7, minor: !harmonicDominant), triad(root: root, minor: true)],
++            sampleRate: sampleRate
++        )
++    }
++
++    /// One octave up and back down the scale starting an octave above `root`, then the
++    /// tonic triad arpeggiated (5 s at the default note duration).
++    public static func scaleMelody(root: Int, minor: Bool, sampleRate: Double = 44100) -> [Float] {
++        let steps = minor ? naturalMinorSteps : majorSteps
++        let ascending = steps.map { root + 12 + $0 }
++        let arpeggio = [root + 12, root + (minor ? 15 : 16), root + 19, root + 12]
++        return melody(ascending + [root + 24] + ascending.reversed() + arpeggio, sampleRate: sampleRate)
++    }
++}
+diff --git a/Tests/MockingBirdCLITests/.gitkeep b/Vendor/miniaudio/.gitkeep
+similarity index 100%
+rename from Tests/MockingBirdCLITests/.gitkeep
+rename to Vendor/miniaudio/.gitkeep
+diff --git a/scripts/test.sh b/scripts/test.sh
+new file mode 100755
+index 0000000..74843cb
+--- /dev/null
++++ b/scripts/test.sh
+@@ -0,0 +1,16 @@
++#!/bin/sh
++# Runs `swift test`, adding the framework/rpath flags Swift Testing needs when only the
++# Command Line Tools are installed (no Xcode). All arguments are forwarded to `swift test`.
++set -eu
++
++if [ "$(uname)" = "Darwin" ] && ! xcodebuild -version >/dev/null 2>&1; then
++    CLT=/Library/Developer/CommandLineTools/Library/Developer
++    exec swift test \
++        -Xswiftc -F"$CLT/Frameworks" \
++        -Xlinker -F"$CLT/Frameworks" \
++        -Xlinker -rpath -Xlinker "$CLT/Frameworks" \
++        -Xlinker -rpath -Xlinker "$CLT/usr/lib" \
++        "$@"
++fi
++
++exec swift test "$@"
