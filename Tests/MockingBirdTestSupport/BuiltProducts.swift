@@ -33,6 +33,7 @@ public enum BuiltProducts {
         }
         // The image containing this code is the test bundle binary, which SwiftPM places in
         // (Linux) or a few levels below (macOS .xctest bundle) the products directory.
+        #if canImport(Darwin)
         var info = Dl_info()
         if dladdr(#dsohandle, &info) != 0, let imagePath = info.dli_fname {
             var directory = URL(fileURLWithPath: String(cString: imagePath)).deletingLastPathComponent()
@@ -41,6 +42,12 @@ public enum BuiltProducts {
                 directory = directory.deletingLastPathComponent()
             }
         }
+        #else
+        // On Linux the test runner is itself an executable in the products directory.
+        if let executable = Bundle.main.executableURL {
+            directories.append(executable.deletingLastPathComponent())
+        }
+        #endif
         directories.append(Bundle.main.bundleURL)
         return directories
     }
