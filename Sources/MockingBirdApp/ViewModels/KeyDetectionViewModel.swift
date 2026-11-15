@@ -51,11 +51,6 @@ final class KeyDetectionViewModel {
         }
     }
 
-    /// True while live capture is requested or running.
-    var isListening: Bool {
-        state == .listening || state == .requestingPermission
-    }
-
     /// Asks for microphone access, then publishes a rolling result every hop until `stop()`.
     /// Stops any file analysis in progress.
     func startListening() {
