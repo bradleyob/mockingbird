@@ -1,6 +1,7 @@
 /// A 12-bin, L2-normalized chroma vector representing pitch class energy.
 ///
-/// Index 0 = C, index 11 = B. Produced by `ChromaExtractor` from FFT magnitudes.
+/// Index 0 = C, index 11 = B. Produced by `ChromaExtractor` from FFT spectral peaks.
+/// Silence gives all-zero bins.
 public struct ChromaVector: Equatable, Codable, Sendable {
     /// 12 pitch class energy bins. Count is always exactly 12.
     public let bins: [Float]
