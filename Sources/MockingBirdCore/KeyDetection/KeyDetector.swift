@@ -1,5 +1,3 @@
-import Accelerate
-
 /// Correlates a `ChromaVector` against a `ProfileLibrary` and returns a `KeyResult`.
 ///
 /// Uses cosine similarity (dot product of two L2-normalized vectors).
@@ -72,8 +70,6 @@ public struct KeyDetector {
 
     /// Cosine similarity of two L2-normalized 12-element vectors (= their dot product).
     private func cosineSimilarity(_ x: [Float], _ y: [Float]) -> Float {
-        var result: Float = 0
-        vDSP_dotpr(x, 1, y, 1, &result, vDSP_Length(12))
-        return result
+        zip(x, y).reduce(0) { $0 + $1.0 * $1.1 }
     }
 }

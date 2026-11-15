@@ -1,4 +1,4 @@
-import Accelerate
+import Foundation
 
 /// Maps FFT magnitude bins to a 12-bin L2-normalized `ChromaVector`.
 ///
@@ -37,16 +37,10 @@ public struct ChromaExtractor {
             bins[pitchClass] += magnitudes[binIndex]
         }
 
-        // L2 normalize
-        var sumOfSquares: Float = 0
-        vDSP_svesq(bins, 1, &sumOfSquares, vDSP_Length(12))
-        let norm = sumOfSquares.squareRoot()
-        if norm > 0 {
-            var normValue = norm
-            vDSP_vsdiv(bins, 1, &normValue, &bins, 1, 12)
-        }
+        let norm = bins.reduce(0) { $0 + $1 * $1 }.squareRoot()
+        let normalized = norm > 0 ? bins.map { $0 / norm } : bins
 
-        return ChromaVector(bins: bins, sampleRate: config.sampleRate, windowSize: config.windowSize)
+        return ChromaVector(bins: normalized, sampleRate: config.sampleRate, windowSize: config.windowSize)
     }
 
     // MARK: - Private
