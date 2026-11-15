@@ -10,7 +10,7 @@ enum DeviceDirectory {
     /// - Throws: `CLIFailure.runtime` if the platform cannot enumerate devices.
     static func inputDeviceNames() throws(CLIFailure) -> [String] {
         #if canImport(AudioSourceAVFoundation)
-        return []
+        return AVFoundationSource.inputDeviceNames()
         #else
         do {
             return try MiniAudioSource.inputDeviceNames()

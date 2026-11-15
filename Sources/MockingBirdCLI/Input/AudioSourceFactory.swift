@@ -40,10 +40,18 @@ enum AudioSourceFactory {
     }
 
     private static func deviceSource(name: String?) throws(CLIFailure) -> any AudioSource {
+        // Rejecting an unknown name here, before any capture starts, gives a message that
+        // names the device and guarantees no microphone permission prompt for a typo.
+        if let name {
+            let known = try DeviceDirectory.inputDeviceNames()
+            guard known.contains(name) else {
+                throw .runtime("no capture device named '\(name)'; run mockingbird --list-devices")
+            }
+        }
         #if canImport(AudioSourceAVFoundation)
-        AVFoundationSource()
+        return AVFoundationSource(deviceName: name)
         #else
-        MiniAudioSource(deviceName: name)
+        return MiniAudioSource(deviceName: name)
         #endif
     }
 }

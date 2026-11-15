@@ -131,6 +131,9 @@ enum CLIApplication {
             if case .file(let path, _) = selection {
                 return .unreadableInput("cannot decode input file '\(path)': \(sourceError)")
             }
+            if case .device(let name) = selection {
+                return .runtime("audio input from device '\(name ?? "default")' failed: \(sourceError)")
+            }
             return .runtime("audio input failed: \(sourceError)")
         case let pipelineError as PipelineError:
             if case .file(let path, _) = selection,
