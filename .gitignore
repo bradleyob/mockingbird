@@ -21,3 +21,9 @@ DerivedData/
 .AppleDouble
 .LSOverride
 ._*
+
+# Linux (Docker) build directory
+.build-linux/
+
+# App bundle output
+build/

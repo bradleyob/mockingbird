@@ -15,6 +15,7 @@ import Foundation
 public actor AnalysisPipeline {
     private let source: any AudioSource
     private let config: AudioConfig
+    private let aggregation: ChromaAggregation
     private let fft: FFTProcessor
     private let chroma: ChromaExtractor
     private let detector: KeyDetector
@@ -27,14 +28,18 @@ public actor AnalysisPipeline {
     ///   - source: Audio source providing raw PCM chunks.
     ///   - config: Pipeline configuration. Defaults to standard 44100/4096.
     ///   - library: Profile library for key detection. Defaults to built-in set.
+    ///   - aggregation: How chroma is combined across windows before detection.
     /// - Throws: `PipelineError.fftSetupFailed` if the FFT transform cannot be allocated.
     public init(
         source: any AudioSource,
         config: AudioConfig = AudioConfig(),
-        library: ProfileLibrary = .default
+        library: ProfileLibrary = .default,
+        aggregation: ChromaAggregation = .cumulative
     ) throws {
         self.source = source
         self.config = config
+        // Phase 0 contract stub: stored but not yet honoured (Track A, MB-21).
+        self.aggregation = aggregation
         self.fft = try FFTProcessor(config: config)
         self.chroma = ChromaExtractor(config: config)
         self.detector = KeyDetector(library: library, numAlternates: config.numAlternates)

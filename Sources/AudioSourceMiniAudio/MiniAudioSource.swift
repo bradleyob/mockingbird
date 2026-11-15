@@ -1,20 +1,26 @@
 import MockingBirdCore
 
-/// Stub: Linux/POSIX microphone capture via the vendored miniaudio C library.
+/// Microphone capture via the vendored miniaudio C library (Linux/POSIX; also builds on macOS).
 ///
-/// Full implementation will call `mb_device_init` / `mb_device_start` via the
-/// C bridge in `Sources/AudioSourceMiniAudio/miniaudio_bridge.c`.
-/// The data callback posts chunks to the stream continuation via a lock-free ring buffer
-/// pre-allocated at init so the callback path never allocates.
+/// Phase 0 contract stub — Track C (MB-11) implements the body. The public signatures
+/// below are frozen: the CLI (Track B) compiles against them.
 public final class MiniAudioSource: AudioSource {
-    public init() {}
+    private let deviceName: String?
 
-    public func start(sampleRate: Double) throws -> AsyncThrowingStream<[Float], Error> {
-        // TODO: MB-11 — implement miniaudio device init and real-time callback bridge
+    /// - Parameter deviceName: Capture device to open, matched by name. `nil` or
+    ///   `"default"` selects the system default input.
+    public init(deviceName: String? = nil) {
+        self.deviceName = deviceName
+    }
+
+    /// Names of the capture devices miniaudio can see, in enumeration order.
+    public static func inputDeviceNames() throws -> [String] {
         throw AudioSourceError.deviceUnavailable
     }
 
-    public func stop() {
-        // TODO: MB-11 — stop and destroy ma_device
+    public func start(sampleRate: Double) throws -> AsyncThrowingStream<[Float], Error> {
+        throw AudioSourceError.deviceUnavailable
     }
+
+    public func stop() {}
 }

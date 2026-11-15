@@ -5,8 +5,9 @@
 extern "C" {
 #endif
 
-// TODO: MB-11 — declare mb_device_init, mb_device_start, mb_device_stop
+// Phase 0 placeholder. Track C (MB-11) declares the real mb_ API here.
 // All project C functions use the mb_ prefix per coding contract.
+int mb_bridge_placeholder(void);
 
 #ifdef __cplusplus
 }

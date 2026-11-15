@@ -1,3 +1,6 @@
+// Phase 0: XCTest is unavailable with Command Line Tools only. Track A (MB-18) migrates
+// this file to Swift Testing and removes this guard.
+#if canImport(XCTest)
 import XCTest
 @testable import MockingBirdCore
 
@@ -192,3 +195,4 @@ struct SyntheticSource: AudioSource {
 
     func stop() {}
 }
+#endif
