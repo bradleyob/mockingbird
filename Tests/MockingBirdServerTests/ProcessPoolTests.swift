@@ -128,7 +128,10 @@ import Testing
                 throw Boom()
             }
         }
-        #expect(ContinuousClock.now - started < .seconds(10))
+        // The child would sleep 30 s; returning well before that proves it was killed and
+        // reaped. Not tighter: a full parallel Linux run starves the cooperative pool (14 s
+        // observed); alone this takes well under a second.
+        #expect(ContinuousClock.now - started < .seconds(25))
         #expect(await pool.activeCount == 0)
     }
 }
