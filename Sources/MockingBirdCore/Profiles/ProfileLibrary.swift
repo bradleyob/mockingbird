@@ -1,7 +1,8 @@
 /// A collection of `ScaleProfile` instances used by `KeyDetector`.
 ///
-/// Use `ProfileLibrary.default` to get the built-in set (Temperley major/minor,
-/// all church modes, blues, jazz, pentatonic, symmetric scales — all 12 transpositions each).
+/// Use `ProfileLibrary.default` to get the built-in set (major/minor, the church modes,
+/// blues, jazz minor and bebop, pentatonic, symmetric scales — 16 scale types in all
+/// 12 transpositions, 192 profiles).
 /// Provide a custom library to restrict or extend detection.
 public struct ProfileLibrary: Codable, Sendable {
     public let profiles: [ScaleProfile]
@@ -47,7 +48,7 @@ public struct ProfileLibrary: Codable, Sendable {
 /// Weights are the Temperley-normalized vectors; other scale types use
 /// established ethnomusicological profiles or empirically derived approximations.
 private let templateProfiles: [ScaleProfile] = [
-    // MARK: Major / Minor (Temperley 1999)
+    // MARK: Major (Temperley 1999) / Minor (Temperley-derived)
     ScaleProfile(
         name: "C major",
         root: .c,
@@ -60,7 +61,7 @@ private let templateProfiles: [ScaleProfile] = [
         root: .c,
         category: .minor,
         scaleName: "minor",
-        weights: temperleyMinor
+        weights: minorWeights
     ),
 
     // MARK: Church modes (derived from major profile with modal rotation + tonic emphasis)
@@ -75,6 +76,8 @@ private let templateProfiles: [ScaleProfile] = [
 
     // MARK: Jazz
     ScaleProfile(name: "C jazz minor", root: .c, category: .jazz,  scaleName: "jazz minor", weights: jazzMinorWeights),
+    ScaleProfile(name: "C bebop dominant", root: .c, category: .jazz, scaleName: "bebop dominant", weights: bebopDominantWeights),
+    ScaleProfile(name: "C bebop major",    root: .c, category: .jazz, scaleName: "bebop major",    weights: bebopMajorWeights),
 
     // MARK: Pentatonic
     ScaleProfile(name: "C major pentatonic", root: .c, category: .pentatonic, scaleName: "major pentatonic", weights: majorPentatonicWeights),
@@ -92,8 +95,10 @@ private let templateProfiles: [ScaleProfile] = [
 /// Temperley (1999) major key profile.
 private let temperleyMajor: [Float] = normalize([5, 2, 3.5, 2, 4.5, 4, 2, 4.5, 2, 3.5, 1.5, 4])
 
-/// Temperley (1999) minor key profile.
-private let temperleyMinor: [Float] = normalize([5, 2, 3.5, 4.5, 2, 4, 2, 4.5, 3.5, 2, 1.5, 4])
+/// Minor key profile. Temperley's (1999) has b7 = 1.5 and natural 7 = 4, which leans
+/// harmonic minor and sends natural-minor material to the relative major or dorian.
+/// Weighting b7 = 3 and 7 = 3 covers natural and harmonic minor alike.
+private let minorWeights: [Float] = normalize([5, 2, 3.5, 4.5, 2, 4, 2, 4.5, 3.5, 2, 3, 3])
 
 // Modes are derived by rotating the major scale's interval structure and
 // re-weighting the tonic/dominant to emphasize the modal center.
@@ -108,6 +113,12 @@ private let bluesWeights: [Float] = normalize([5, 1, 1, 4, 1, 4, 3, 4, 1, 1, 3, 
 
 // Jazz melodic minor (ascending): 1 2 b3 4 5 6 7
 private let jazzMinorWeights: [Float] = normalize([5, 1, 3, 4, 1, 3.5, 1, 4.5, 1, 3, 1, 4])
+
+// Bebop dominant: 1 2 3 4 5 6 b7 7 — mixolydian with a passing major seventh.
+private let bebopDominantWeights: [Float] = normalize([5, 2, 3.5, 2, 4.5, 4, 2, 4.5, 2, 3.5, 4, 3])
+
+// Bebop major: 1 2 3 4 5 #5 6 7 — major with a passing sharp fifth.
+private let bebopMajorWeights: [Float] = normalize([5, 2, 3.5, 2, 4.5, 4, 2, 4.5, 3, 3.5, 1.5, 4])
 
 // Major pentatonic: 1 2 3 5 6
 private let majorPentatonicWeights: [Float] = normalize([5, 1, 3, 1, 4, 1, 1, 4, 1, 3, 1, 1])

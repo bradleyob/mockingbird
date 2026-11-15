@@ -44,4 +44,24 @@ struct ProfileLibraryTests {
             #expect(Set(roots).count == 12, "\(name)")
         }
     }
+
+    @Test("default library has 16 scale types x 12 roots = 192 profiles")
+    func count() {
+        let library = ProfileLibrary.default
+        #expect(library.profiles.count == 192)
+        #expect(Set(library.profiles.map(\.scaleName)).count == 16)
+    }
+
+    @Test("bebop dominant and bebop major are jazz scales next to jazz minor")
+    func bebop() {
+        let jazz = Set(ProfileLibrary.default.profiles(for: .jazz).map(\.scaleName))
+        #expect(jazz == ["jazz minor", "bebop dominant", "bebop major"])
+    }
+
+    @Test("minor profile weights b7 and 7 equally (natural and harmonic minor)")
+    func minorWeights() throws {
+        let cMinor = try #require(ProfileLibrary.default.profiles.first { $0.scaleName == "minor" && $0.root == .c })
+        #expect(abs(cMinor.weights[10] - cMinor.weights[11]) < 1e-6)
+        #expect(cMinor.weights[3] > cMinor.weights[4])
+    }
 }

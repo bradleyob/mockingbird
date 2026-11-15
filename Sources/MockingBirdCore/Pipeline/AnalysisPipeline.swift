@@ -38,7 +38,6 @@ public actor AnalysisPipeline {
     ) throws {
         self.source = source
         self.config = config
-        // Phase 0 contract stub: stored but not yet honoured (Track A, MB-21).
         self.aggregation = aggregation
         self.fft = try FFTProcessor(config: config)
         self.chroma = ChromaExtractor(config: config)
@@ -54,6 +53,7 @@ public actor AnalysisPipeline {
     public func start() throws -> AsyncThrowingStream<KeyResult, Error> {
         let stream = try source.start(sampleRate: config.sampleRate)
         let capturedConfig = config
+        let capturedAggregation = aggregation
         streamStartTime = Date()
         let startTime = streamStartTime!
 
@@ -61,6 +61,7 @@ public actor AnalysisPipeline {
             Task {
                 do {
                     var buffer: [Float] = []
+                    var accumulator = ChromaAccumulator(aggregation: capturedAggregation)
 
                     for try await chunk in stream {
                         buffer.append(contentsOf: chunk)
@@ -70,8 +71,10 @@ public actor AnalysisPipeline {
                             buffer.removeFirst(capturedConfig.hopSize)
 
                             let timestamp = Date().timeIntervalSince(startTime)
-                            let result = try self.analyze(window: window, timestamp: timestamp)
-                            continuation.yield(result)
+                            let energy = self.chromaEnergy(window: window)
+                            let step = accumulator.adding(energy)
+                            accumulator = step.accumulator
+                            continuation.yield(self.detect(energy: step.aggregate, timestamp: timestamp))
                         }
                     }
                     continuation.finish()
@@ -102,9 +105,11 @@ public actor AnalysisPipeline {
 
     // MARK: - Private
 
-    private func analyze(window: [Float], timestamp: Double) throws -> KeyResult {
-        let magnitudes = fft.process(window)
-        let chromaVec = chroma.extract(magnitudes)
-        return detector.detect(chromaVec, timestamp: timestamp)
+    private func chromaEnergy(window: [Float]) -> [Float] {
+        chroma.extractEnergy(fft.process(window))
+    }
+
+    private func detect(energy: [Float], timestamp: Double) -> KeyResult {
+        detector.detect(chroma.normalized(energy), timestamp: timestamp)
     }
 }
