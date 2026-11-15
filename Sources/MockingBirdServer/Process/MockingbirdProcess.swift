@@ -1,23 +1,26 @@
 import Foundation
+import NIOCore
+import NIOPosix
 
 /// One running `mockingbird` subprocess: stdin writes, stdout as lines, stderr collected,
 /// and its exit.
 ///
-/// `FileHandle.readabilityHandler` and `Process.terminationHandler` callbacks are bridged into
-/// `AsyncStream`s, so no `DispatchQueue` or `Thread` is used here and nothing blocks waiting
-/// for output. Output is buffered eagerly, so a child can never stall on a full stdout or
-/// stderr pipe while the server is busy elsewhere.
+/// The parent ends of the stdio pipes are SwiftNIO pipe channels, so reads and writes are
+/// non-blocking and never tie up a Swift concurrency thread, and stdin writes get
+/// back-pressure from the event loop. `FileHandle.readabilityHandler` is not used: on Linux,
+/// swift-corelibs-foundation sometimes never reports end of file through it, which hung
+/// requests. Output is read eagerly into `AsyncStream`s, so a child can never stall on a full
+/// stdout or stderr pipe. `Process.terminationHandler` is bridged into an `AsyncStream` too;
+/// no `DispatchQueue` or `Thread` is used.
 ///
-/// `@unchecked Sendable`: `Process` and `FileHandle` are not annotated, but every mutable
-/// piece of state lives in them or in the streams, which are thread-safe.
+/// `@unchecked Sendable`: `Process` is not annotated; it is only used for `run`,
+/// `isRunning` and `processIdentifier`, which are safe from any thread.
 final class MockingbirdProcess: @unchecked Sendable {
-    /// Bytes per `write(2)` when piping a large body; matches the usual pipe buffer size.
-    static let writeChunkSize = 65_536
     /// How long to keep draining stderr after the process has exited.
     static let stderrGrace = Duration.seconds(1)
 
     private let process: Process
-    private let standardInput: FileHandle?
+    private let standardInput: (any Channel)?
     private let exitTask: Task<ProcessExit, Never>
 
     /// The CLI's stdout, one element per line. Iterate it once.
@@ -25,7 +28,7 @@ final class MockingbirdProcess: @unchecked Sendable {
 
     private init(
         process: Process,
-        standardInput: FileHandle?,
+        standardInput: (any Channel)?,
         standardOutput: AsyncStream<Data>,
         exitTask: Task<ProcessExit, Never>
     ) {
@@ -41,28 +44,37 @@ final class MockingbirdProcess: @unchecked Sendable {
         executable: URL,
         arguments: [String],
         standardInput mode: StandardInputMode
-    ) throws(APIError) -> MockingbirdProcess {
+    ) async throws(APIError) -> MockingbirdProcess {
+        SignalDisposition.ignoreBrokenPipe()
         let process = Process()
         process.executableURL = executable
         process.arguments = arguments
 
-        let inputPipe: Pipe?
-        switch mode {
-        case .pipe:
-            let pipe = Pipe()
-            process.standardInput = pipe
-            inputPipe = pipe
-        case .none:
-            process.standardInput = FileHandle.nullDevice
-            inputPipe = nil
+        let inputPipe: PipeDescriptors?
+        let outputPipe: PipeDescriptors
+        let errorPipe: PipeDescriptors
+        do {
+            inputPipe = mode == .pipe ? try PipeDescriptors() : nil
+            outputPipe = try PipeDescriptors()
+            errorPipe = try PipeDescriptors()
+        } catch {
+            throw APIError.spawnFailed("cannot create pipes: \(error)")
         }
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
+        // The child's ends, closed in the parent once the child has them.
+        var childEnds: [FileHandle] = []
+        if let inputPipe {
+            childEnds.append(FileHandle(fileDescriptor: inputPipe.read, closeOnDealloc: true))
+        } else if let devNull = FileHandle(forReadingAtPath: "/dev/null") {
+            childEnds.append(devNull)
+        } else {
+            throw APIError.spawnFailed("cannot open /dev/null")
+        }
+        childEnds.append(FileHandle(fileDescriptor: outputPipe.write, closeOnDealloc: true))
+        childEnds.append(FileHandle(fileDescriptor: errorPipe.write, closeOnDealloc: true))
+        process.standardInput = childEnds[0]
+        process.standardOutput = childEnds[1]
+        process.standardError = childEnds[2]
 
-        let standardOutput = stream(from: outputPipe.fileHandleForReading)
-        let standardError = stream(from: errorPipe.fileHandleForReading)
         let (termination, terminationContinuation) = AsyncStream<ProcessExit>.makeStream()
         process.terminationHandler = { finished in
             terminationContinuation.yield(ProcessExit(
@@ -73,12 +85,33 @@ final class MockingbirdProcess: @unchecked Sendable {
             terminationContinuation.finish()
         }
 
+        let parentEnds = [inputPipe?.write, outputPipe.read, errorPipe.read].compactMap { $0 }
         do {
             try process.run()
         } catch {
-            outputPipe.fileHandleForReading.readabilityHandler = nil
-            errorPipe.fileHandleForReading.readabilityHandler = nil
+            closeQuietly(childEnds)
+            parentEnds.forEach { PipeDescriptors.close($0) }
             throw APIError.spawnFailed("cannot start \(executable.path): \(error.localizedDescription)")
+        }
+        closeQuietly(childEnds)
+
+        let standardOutput: AsyncStream<Data>
+        let standardError: AsyncStream<Data>
+        let standardInput: (any Channel)?
+        do {
+            standardOutput = try await readStream(outputPipe.read)
+            standardError = try await readStream(errorPipe.read)
+            if let inputPipe {
+                standardInput = try await NIOPipeBootstrap(group: MultiThreadedEventLoopGroup.singleton)
+                    .takingOwnershipOfDescriptor(output: inputPipe.write) { channel in
+                        channel.eventLoop.makeSucceededFuture(channel)
+                    }
+            } else {
+                standardInput = nil
+            }
+        } catch {
+            _ = kill(process.processIdentifier, SIGKILL)
+            throw APIError.spawnFailed("cannot attach to mockingbird's pipes: \(error)")
         }
 
         let errorTask = Task {
@@ -88,28 +121,40 @@ final class MockingbirdProcess: @unchecked Sendable {
             }
             return errorBytes
         }
+        let pid = process.processIdentifier
         let exitTask = Task {
-            var exit = ProcessExit(status: -1, signalled: true, standardError: "")
-            for await finished in termination {
-                exit = finished
+            let exit = await withTaskGroup(of: ProcessExit?.self) { group in
+                group.addTask {
+                    for await finished in termination {
+                        return finished
+                    }
+                    return nil
+                }
+                group.addTask { await ZombieProbe.waitForExit(of: pid) }
+                var first: ProcessExit?
+                while first == nil, let next = await group.next() {
+                    first = next
+                }
+                group.cancelAll()
+                return first ?? ProcessExit(status: -1, signalled: true, standardError: "")
             }
             // A grandchild that inherited stderr can hold it open after the CLI exits; give
             // the drain a moment, then report what arrived rather than hold the pool slot.
-            let drained = await withTaskGroup(of: Bool.self) { group in
+            await withTaskGroup(of: Void.self) { group in
                 group.addTask {
                     _ = await errorTask.value
-                    return true
                 }
                 group.addTask {
-                    try? await Task.sleep(for: Self.stderrGrace)
-                    return false
+                    do {
+                        try await Task.sleep(for: Self.stderrGrace)
+                    } catch {
+                        return
+                    }
+                    // errorTask is unstructured, so group cancellation would not reach it.
+                    errorTask.cancel()
                 }
-                let first = await group.next() ?? false
+                _ = await group.next()
                 group.cancelAll()
-                return first
-            }
-            if !drained {
-                errorTask.cancel()
             }
             return ProcessExit(
                 status: exit.status,
@@ -119,43 +164,38 @@ final class MockingbirdProcess: @unchecked Sendable {
         }
         return MockingbirdProcess(
             process: process,
-            standardInput: inputPipe?.fileHandleForWriting,
+            standardInput: standardInput,
             standardOutput: standardOutput,
             exitTask: exitTask
         )
     }
 
-    /// Writes `data` to the child's stdin in pipe-sized pieces.
-    /// - Throws: if stdin is not a pipe, or the child has closed it (`EPIPE`; `SIGPIPE` is
-    ///   ignored by `SignalDisposition`).
-    func write(_ data: Data) throws {
+    /// Writes `data` to the child's stdin, returning once the event loop has written it all.
+    /// - Throws: if stdin is not a pipe or the child has closed it (`EPIPE`).
+    func write(_ data: Data) async throws {
         guard let standardInput else {
             throw APIError.analysisFailed("mockingbird stdin is not a pipe")
         }
-        var offset = data.startIndex
-        while offset < data.endIndex {
-            let end = min(offset + Self.writeChunkSize, data.endIndex)
-            try standardInput.write(contentsOf: data[offset..<end])
-            offset = end
-        }
+        try await standardInput.writeAndFlush(ByteBuffer(bytes: data)).get()
     }
 
     /// Closes the child's stdin so it sees end of input.
-    func closeStandardInput() throws {
-        try standardInput?.close()
+    func closeStandardInput() async throws {
+        try await standardInput?.close()
     }
 
-    /// Sends `SIGTERM` if the child is still running, and closes its stdin so anything it
-    /// left behind reading stdin sees end of input too.
+    /// Kills the child if it is still running, and closes its stdin so anything it left
+    /// behind reading stdin sees end of input too.
+    ///
+    /// `SIGKILL`, not `Process.terminate()` (`SIGTERM`): on Linux, swift-corelibs-foundation
+    /// spawns children with the spawning thread's signal mask, and Swift concurrency threads
+    /// block `SIGTERM`, so a terminated CLI would never die. The CLI holds nothing that
+    /// needs a graceful shutdown.
     func terminate() {
         if process.isRunning {
-            process.terminate()
+            _ = kill(process.processIdentifier, SIGKILL)
         }
-        do {
-            try closeStandardInput()
-        } catch {
-            // Already closed.
-        }
+        standardInput?.close(promise: nil)
     }
 
     /// Waits until the child has exited and its stderr is drained. May be awaited repeatedly.
@@ -163,18 +203,31 @@ final class MockingbirdProcess: @unchecked Sendable {
         await exitTask.value
     }
 
-    private static func stream(from handle: FileHandle) -> AsyncStream<Data> {
+    /// Reads a pipe on the event loop into a stream that finishes at end of file.
+    private static func readStream(_ descriptor: CInt) async throws -> AsyncStream<Data> {
         let (stream, continuation) = AsyncStream<Data>.makeStream()
-        handle.readabilityHandler = { readable in
-            let chunk = readable.availableData
-            if chunk.isEmpty {
-                readable.readabilityHandler = nil
-                continuation.finish()
-            } else {
-                continuation.yield(chunk)
-            }
+        do {
+            _ = try await NIOPipeBootstrap(group: MultiThreadedEventLoopGroup.singleton)
+                .takingOwnershipOfDescriptor(input: descriptor) { channel in
+                    channel.eventLoop.makeCompletedFuture {
+                        try channel.pipeline.syncOperations.addHandler(PipeReadHandler(continuation: continuation))
+                    }
+                }
+        } catch {
+            continuation.finish()
+            throw error
         }
         return stream
+    }
+
+    private static func closeQuietly(_ handles: [FileHandle]) {
+        for handle in handles {
+            do {
+                try handle.close()
+            } catch {
+                // Already closed; nothing to release.
+            }
+        }
     }
 }
 
@@ -182,14 +235,14 @@ extension MockingbirdProcess {
     /// Writes all of `data` to stdin, then closes it. A write failure means the child closed
     /// its stdin early (usually because it has already failed); that is not an error here —
     /// the child's exit status says what went wrong.
-    func sendInput(_ data: Data) {
+    func sendInput(_ data: Data) async {
         do {
-            try write(data)
+            try await write(data)
         } catch {
             // Reported through the exit status instead.
         }
         do {
-            try closeStandardInput()
+            try await closeStandardInput()
         } catch {
             // Already closed: nothing left to signal.
         }

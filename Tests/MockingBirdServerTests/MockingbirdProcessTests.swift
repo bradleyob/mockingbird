@@ -13,7 +13,7 @@ import Testing
             exit 3
             """)
 
-        let process = try MockingbirdProcess.launch(
+        let process = try await MockingbirdProcess.launch(
             executable: script, arguments: ["--a", "b c"], standardInput: .none)
         var lines: [String] = []
         for await line in process.standardOutputLines {
@@ -32,9 +32,9 @@ import Testing
         defer { fake.remove() }
         let script = try fake.script("counter", "wc -c | tr -d ' '")
 
-        let process = try MockingbirdProcess.launch(executable: script, arguments: [], standardInput: .pipe)
-        try process.write(Data(repeating: 7, count: 200_000))
-        try process.closeStandardInput()
+        let process = try await MockingbirdProcess.launch(executable: script, arguments: [], standardInput: .pipe)
+        try await process.write(Data(repeating: 7, count: 200_000))
+        try await process.closeStandardInput()
         var lines: [String] = []
         for await line in process.standardOutputLines {
             lines.append(line)
@@ -50,11 +50,11 @@ import Testing
         defer { fake.remove() }
         let script = try fake.script("quitter", "exit 2")
 
-        let process = try MockingbirdProcess.launch(executable: script, arguments: [], standardInput: .pipe)
+        let process = try await MockingbirdProcess.launch(executable: script, arguments: [], standardInput: .pipe)
         _ = await process.exit()
-        #expect(throws: (any Error).self) {
+        await #expect(throws: (any Error).self) {
             for _ in 0..<64 {
-                try process.write(Data(repeating: 0, count: 65_536))
+                try await process.write(Data(repeating: 0, count: 65_536))
             }
         }
     }
@@ -64,7 +64,7 @@ import Testing
         defer { fake.remove() }
         let script = try fake.script("sleeper", "exec sleep 30")
 
-        let process = try MockingbirdProcess.launch(executable: script, arguments: [], standardInput: .pipe)
+        let process = try await MockingbirdProcess.launch(executable: script, arguments: [], standardInput: .pipe)
         process.terminate()
         let exit = await process.exit()
 

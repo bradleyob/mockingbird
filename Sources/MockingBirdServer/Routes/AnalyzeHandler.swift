@@ -74,7 +74,7 @@ struct AnalyzeHandler: Sendable {
         try await pool.run(executable: options.mockingbird, arguments: arguments, standardInput: standardInput) { process in
             try await withTaskGroup(of: Void.self) { group in
                 if let input {
-                    group.addTask { process.sendInput(input) }
+                    group.addTask { await process.sendInput(input) }
                 }
                 var lastLine: String?
                 for await line in process.standardOutputLines {

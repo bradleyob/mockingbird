@@ -34,7 +34,7 @@ import Testing
             for _ in 0..<count {
                 group.addTask {
                     try await pool.run(executable: executable, arguments: [], standardInput: .pipe) { process in
-                        try process.closeStandardInput()
+                        try await process.closeStandardInput()
                         var lines: [String] = []
                         for await line in process.standardOutputLines {
                             lines.append(line)

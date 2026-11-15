@@ -42,7 +42,7 @@ actor ProcessPool {
         try await acquire()
         let process: MockingbirdProcess
         do {
-            process = try MockingbirdProcess.launch(
+            process = try await MockingbirdProcess.launch(
                 executable: executable, arguments: arguments, standardInput: standardInput)
         } catch {
             await release()

@@ -61,7 +61,7 @@ struct StreamHandler: Sendable {
                 return nil
             }
             do {
-                try process.closeStandardInput()
+                try await process.closeStandardInput()
             } catch {
                 // The CLI already closed it; its exit status explains why.
             }
@@ -79,7 +79,7 @@ struct StreamHandler: Sendable {
                 switch message {
                 case .binary(let buffer):
                     do {
-                        try process.write(Data(buffer.readableBytesView))
+                        try await process.write(Data(buffer.readableBytesView))
                     } catch {
                         return true
                     }
