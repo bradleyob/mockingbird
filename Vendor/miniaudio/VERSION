@@ -1,0 +1,12 @@
+miniaudio 0.11.26
+tag:     0.11.26 (commit 877ea4a7c2601c7b0f2a44e83dfac42e6470fea6)
+release: https://github.com/mackron/miniaudio/releases/tag/0.11.26
+source:  https://raw.githubusercontent.com/mackron/miniaudio/0.11.26/miniaudio.h
+         https://raw.githubusercontent.com/mackron/miniaudio/0.11.26/LICENSE
+sha256:  6b376c7fbb1352ba1e0e432ab66069b335ea9405e45cb6c30b97ef0f3c9c3e0e  miniaudio.h
+         457f1b500e0adf6bc059edddfa78a2f62012e7c3bb43476c20e0bd23b25ba0eb  LICENSE
+fetched: 2026-11-15
+
+Unmodified upstream files. Licence: public domain (Unlicense) or MIT No Attribution, at
+your choice (see LICENSE). The implementation is compiled once, in
+Sources/CMiniAudio/miniaudio_bridge.c.
