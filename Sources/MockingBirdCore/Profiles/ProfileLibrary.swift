@@ -11,6 +11,22 @@ public struct ProfileLibrary: Codable, Sendable {
         self.profiles = profiles
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case profiles
+    }
+
+    /// Decodes and validates a library; an empty profile list (or any invalid profile)
+    /// throws `DecodingError` instead of trapping.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let profiles = try container.decode([ScaleProfile].self, forKey: .profiles)
+        guard !profiles.isEmpty else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .profiles, in: container, debugDescription: "ProfileLibrary must not be empty")
+        }
+        self.init(profiles: profiles)
+    }
+
     // MARK: - Default library
 
     /// The built-in profile set. Ships all 12 transpositions for each scale type.

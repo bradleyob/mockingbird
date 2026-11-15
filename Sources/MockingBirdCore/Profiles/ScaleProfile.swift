@@ -31,6 +31,29 @@ public struct ScaleProfile: Equatable, Codable, Sendable {
         self.weights = weights
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case name, root, category, scaleName, weights
+    }
+
+    /// Decodes and validates a profile; a weight count other than 12 throws
+    /// `DecodingError.dataCorrupted` instead of trapping.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let weights = try container.decode([Float].self, forKey: .weights)
+        guard weights.count == 12 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .weights, in: container,
+                debugDescription: "ScaleProfile weights count must be 12, got \(weights.count)")
+        }
+        self.init(
+            name: try container.decode(String.self, forKey: .name),
+            root: try container.decode(PitchClass.self, forKey: .root),
+            category: try container.decode(ScaleCategory.self, forKey: .category),
+            scaleName: try container.decode(String.self, forKey: .scaleName),
+            weights: weights
+        )
+    }
+
     /// Returns a new profile transposed by `semitones`, rotating the weight vector accordingly.
     ///
     /// Weights are indexed by absolute pitch class (0=C…11=B), so transposing by N
