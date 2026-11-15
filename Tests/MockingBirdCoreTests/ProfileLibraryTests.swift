@@ -1,46 +1,47 @@
-// Phase 0: XCTest is unavailable with Command Line Tools only. Track A (MB-18) migrates
-// this file to Swift Testing and removes this guard.
-#if canImport(XCTest)
-import XCTest
+import Testing
 @testable import MockingBirdCore
 
-final class ProfileLibraryTests: XCTestCase {
+@Suite("ProfileLibrary")
+struct ProfileLibraryTests {
 
-    func testDefaultLibraryIsNonEmpty() {
-        XCTAssertFalse(ProfileLibrary.default.profiles.isEmpty)
+    @Test("default library is non-empty")
+    func nonEmpty() {
+        #expect(!ProfileLibrary.default.profiles.isEmpty)
     }
 
-    func testAllProfilesHave12Weights() {
+    @Test("every profile has 12 weights")
+    func twelveWeights() {
         for profile in ProfileLibrary.default.profiles {
-            XCTAssertEqual(profile.weights.count, 12, "\(profile.name) has wrong weight count")
+            #expect(profile.weights.count == 12, "\(profile.name)")
         }
     }
 
-    func testAllProfilesAreApproximatelyNormalized() {
+    @Test("every profile is unit-normalised")
+    func unitNorm() {
         for profile in ProfileLibrary.default.profiles {
             let norm = profile.weights.map { $0 * $0 }.reduce(0, +).squareRoot()
-            XCTAssertEqual(Double(norm), 1.0, accuracy: 0.01, "\(profile.name) is not unit-normalized")
+            #expect(abs(norm - 1) < 0.01, "\(profile.name)")
         }
     }
 
-    func testTranspositionPreservesWeightMagnitude() {
-        let cMajor = ProfileLibrary.default.profiles.first { $0.scaleName == "major" && $0.root == .c }!
+    @Test("transposition rotates weights right")
+    func transpositionRotates() throws {
+        let cMajor = try #require(ProfileLibrary.default.profiles.first { $0.scaleName == "major" && $0.root == .c })
         let dMajor = cMajor.transposed(by: 2)
-        XCTAssertEqual(dMajor.root, .d)
-        XCTAssertEqual(dMajor.scaleName, "major")
-        // Right rotation by 2: dMajor[i] == cMajor[(i - 2 + 12) % 12]
-        // Tonic weight (highest, at C=0 in template) must land at D=2 in D major.
-        XCTAssertEqual(dMajor.weights[2], cMajor.weights[0], accuracy: 0.001) // tonic at D
-        XCTAssertEqual(dMajor.weights[4], cMajor.weights[2], accuracy: 0.001) // 2nd at E
-        XCTAssertEqual(dMajor.weights[0], cMajor.weights[10], accuracy: 0.001) // A# weight at C
+        #expect(dMajor.root == .d)
+        #expect(dMajor.scaleName == "major")
+        #expect(abs(dMajor.weights[2] - cMajor.weights[0]) < 0.001)
+        #expect(abs(dMajor.weights[4] - cMajor.weights[2]) < 0.001)
+        #expect(abs(dMajor.weights[0] - cMajor.weights[10]) < 0.001)
     }
 
-    func testEachScaleHas12Transpositions() {
-        let scaleNames = Set(ProfileLibrary.default.profiles.map(\.scaleName))
-        for name in scaleNames {
-            let count = ProfileLibrary.default.profiles.filter { $0.scaleName == name }.count
-            XCTAssertEqual(count, 12, "Scale '\(name)' has \(count) transpositions, expected 12")
+    @Test("every scale type has 12 transpositions, one per root")
+    func twelveTranspositions() {
+        let library = ProfileLibrary.default
+        for name in Set(library.profiles.map(\.scaleName)) {
+            let roots = library.profiles.filter { $0.scaleName == name }.map(\.root)
+            #expect(roots.count == 12, "\(name)")
+            #expect(Set(roots).count == 12, "\(name)")
         }
     }
 }
-#endif
