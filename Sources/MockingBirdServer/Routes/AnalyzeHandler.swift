@@ -65,7 +65,7 @@ struct AnalyzeHandler: Sendable {
             }
             collected.writeImmutableBuffer(chunk)
         }
-        return Data(buffer: collected)
+        return Data(collected.readableBytesView)
     }
 
     /// Spawns the CLI in a pool slot, feeds `input` to stdin while reading stdout, and returns

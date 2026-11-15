@@ -79,7 +79,7 @@ struct StreamHandler: Sendable {
                 switch message {
                 case .binary(let buffer):
                     do {
-                        try process.write(Data(buffer: buffer))
+                        try process.write(Data(buffer.readableBytesView))
                     } catch {
                         return true
                     }

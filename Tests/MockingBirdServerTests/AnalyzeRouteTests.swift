@@ -47,7 +47,7 @@ import Testing
     }
 
     private func errorCode(_ response: LiveServer.HTTPResult) throws -> String {
-        try JSONDecoder().decode(APIErrorBody.self, from: Data(buffer: response.body)).error.code
+        try JSONDecoder().decode(APIErrorBody.self, from: Data(response.body.readableBytesView)).error.code
     }
 
     private func keyResultObject(_ response: LiveServer.HTTPResult) throws -> [String: Any] {
@@ -180,7 +180,7 @@ import Testing
         try await LiveServer.run(ApplicationBuilder(options: .testing(mockingbird: broken))) { port in
             let response = try await post(port, body: Self.rawCadence)
             #expect(response.status == .internalServerError)
-            let body = try JSONDecoder().decode(APIErrorBody.self, from: Data(buffer: response.body))
+            let body = try JSONDecoder().decode(APIErrorBody.self, from: Data(response.body.readableBytesView))
             #expect(body.error.code == "analysis_failed")
             #expect(body.error.message.contains("boom"))
         }
