@@ -3,7 +3,7 @@ import Hummingbird
 
 /// Entry point for `mockingbird-server`, the HTTP/WebSocket gateway in front of the
 /// `mockingbird` CLI. Parses options and runs the application; the routes live in
-/// `ApplicationBuilder`. No DSP, no MockingBirdCore.
+/// `ApplicationBuilder`. No DSP; it never links the Core library.
 @main
 enum ServerMain {
     static func main() async throws {

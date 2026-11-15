@@ -11,7 +11,7 @@ import NIOPosix
 /// swift-corelibs-foundation sometimes never reports end of file through it, which hung
 /// requests. Output is read eagerly into `AsyncStream`s, so a child can never stall on a full
 /// stdout or stderr pipe. `Process.terminationHandler` is bridged into an `AsyncStream` too;
-/// no `DispatchQueue` or `Thread` is used.
+/// no Dispatch queues or threads are created here.
 ///
 /// `@unchecked Sendable`: `Process` is not annotated; it is only used for `run`,
 /// `isRunning` and `processIdentifier`, which are safe from any thread.
