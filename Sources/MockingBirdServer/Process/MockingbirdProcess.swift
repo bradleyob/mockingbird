@@ -13,6 +13,8 @@ import Foundation
 final class MockingbirdProcess: @unchecked Sendable {
     /// Bytes per `write(2)` when piping a large body; matches the usual pipe buffer size.
     static let writeChunkSize = 65_536
+    /// How long to keep draining stderr after the process has exited.
+    static let stderrGrace = Duration.seconds(1)
 
     private let process: Process
     private let standardInput: FileHandle?
@@ -79,19 +81,40 @@ final class MockingbirdProcess: @unchecked Sendable {
             throw APIError.spawnFailed("cannot start \(executable.path): \(error.localizedDescription)")
         }
 
-        let exitTask = Task {
+        let errorTask = Task {
             var errorBytes = Data()
             for await chunk in standardError {
                 errorBytes.append(chunk)
             }
+            return errorBytes
+        }
+        let exitTask = Task {
             var exit = ProcessExit(status: -1, signalled: true, standardError: "")
             for await finished in termination {
                 exit = finished
             }
+            // A grandchild that inherited stderr can hold it open after the CLI exits; give
+            // the drain a moment, then report what arrived rather than hold the pool slot.
+            let drained = await withTaskGroup(of: Bool.self) { group in
+                group.addTask {
+                    _ = await errorTask.value
+                    return true
+                }
+                group.addTask {
+                    try? await Task.sleep(for: Self.stderrGrace)
+                    return false
+                }
+                let first = await group.next() ?? false
+                group.cancelAll()
+                return first
+            }
+            if !drained {
+                errorTask.cancel()
+            }
             return ProcessExit(
                 status: exit.status,
                 signalled: exit.signalled,
-                standardError: String(decoding: errorBytes, as: UTF8.self)
+                standardError: String(decoding: await errorTask.value, as: UTF8.self)
             )
         }
         return MockingbirdProcess(
@@ -122,10 +145,16 @@ final class MockingbirdProcess: @unchecked Sendable {
         try standardInput?.close()
     }
 
-    /// Sends `SIGTERM` if the child is still running.
+    /// Sends `SIGTERM` if the child is still running, and closes its stdin so anything it
+    /// left behind reading stdin sees end of input too.
     func terminate() {
         if process.isRunning {
             process.terminate()
+        }
+        do {
+            try closeStandardInput()
+        } catch {
+            // Already closed.
         }
     }
 
