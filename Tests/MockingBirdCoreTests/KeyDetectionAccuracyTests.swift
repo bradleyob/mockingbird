@@ -25,6 +25,7 @@ struct KeyDetectionAccuracyTests {
     @Test("matrix holds under other configurations (at least 57/60)", arguments: [
         AudioConfig(sampleRate: 48000),
         AudioConfig(windowSize: 8192, hopSize: 4096),
+        AudioConfig(zeroPad: true),
     ])
     func matrixVariants(config: AudioConfig) async throws {
         var misses: [String] = []

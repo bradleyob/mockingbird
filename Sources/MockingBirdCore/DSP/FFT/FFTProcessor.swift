@@ -91,40 +91,39 @@ public final class FFTProcessor {
     #if canImport(Accelerate)
     private func processWithVDSP(_ samples: [Float]) -> [Float] {
         let halfN = config.fftSize / 2
+        let packCount = config.windowSize / 2
+        var magnitudes = [Float](repeating: 0, count: halfN)
 
         vDSP_vmul(samples, 1, window, 1, &windowed, 1, vDSP_Length(config.windowSize))
 
-        // Pack N windowed real samples into N/2 complex values (interleaved → split).
-        //
-        // `vDSP_ctoz` stride is in FLOAT units. Stride=2 means "read consecutive
-        // DSPComplex elements" — i.e. stride of 2 floats between real parts, which is
-        // the minimum valid (must be even). This produces:
-        //   realp[k] = windowed[2k], imagp[k] = windowed[2k+1]
-        //
-        // For zero-padding: only windowSize/2 pairs are populated from `windowed`;
-        // the remaining realPart[windowSize/2...] and imagPart[windowSize/2...] stay
-        // at zero (pre-allocated as zeros in init).
-        let packCount = vDSP_Length(config.windowSize / 2)
-        windowed.withUnsafeBufferPointer { wPtr in
-            wPtr.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: Int(packCount)) { cPtr in
-                realPart.withUnsafeMutableBufferPointer { rBuf in
-                    imagPart.withUnsafeMutableBufferPointer { iBuf in
-                        var sc = DSPSplitComplex(realp: rBuf.baseAddress!, imagp: iBuf.baseAddress!)
-                        vDSP_ctoz(cPtr, 2, &sc, 1, packCount)
+        windowed.withUnsafeBufferPointer { windowedBuffer in
+            realPart.withUnsafeMutableBufferPointer { realBuffer in
+                imagPart.withUnsafeMutableBufferPointer { imagBuffer in
+                    magnitudes.withUnsafeMutableBufferPointer { magnitudeBuffer in
+                        guard let windowedBase = windowedBuffer.baseAddress,
+                              let real = realBuffer.baseAddress,
+                              let imag = imagBuffer.baseAddress,
+                              let output = magnitudeBuffer.baseAddress,
+                              packCount > 0 else { return }
+
+                        // The in-place FFT overwrites the whole split buffer, including the
+                        // zero-padded upper half, so that half must be cleared on every call
+                        // or one window's spectrum leaks into the next.
+                        let padding = vDSP_Length(halfN - packCount)
+                        if padding > 0 {
+                            vDSP_vclr(real + packCount, 1, padding)
+                            vDSP_vclr(imag + packCount, 1, padding)
+                        }
+
+                        var split = DSPSplitComplex(realp: real, imagp: imag)
+                        // Pack N real samples as N/2 complex values: realp[k] = x[2k],
+                        // imagp[k] = x[2k+1]. The stride is in Float units, so 2 = adjacent pairs.
+                        windowedBase.withMemoryRebound(to: DSPComplex.self, capacity: packCount) { complex in
+                            vDSP_ctoz(complex, 2, &split, 1, vDSP_Length(packCount))
+                        }
+                        vDSP_fft_zrip(fftSetup, &split, 1, log2n, FFTDirection(FFT_FORWARD))
+                        vDSP_zvabs(&split, 1, output, 1, vDSP_Length(halfN))
                     }
-                }
-            }
-        }
-
-        // In-place real FFT
-        var magnitudes = [Float](repeating: 0, count: halfN)
-        realPart.withUnsafeMutableBufferPointer { rBuf in
-            imagPart.withUnsafeMutableBufferPointer { iBuf in
-                var sc = DSPSplitComplex(realp: rBuf.baseAddress!, imagp: iBuf.baseAddress!)
-                vDSP_fft_zrip(fftSetup, &sc, 1, log2n, FFTDirection(FFT_FORWARD))
-
-                magnitudes.withUnsafeMutableBufferPointer { magBuf in
-                    vDSP_zvabs(&sc, 1, magBuf.baseAddress!, 1, vDSP_Length(halfN))
                 }
             }
         }
