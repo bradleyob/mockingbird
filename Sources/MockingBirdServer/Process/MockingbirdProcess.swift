@@ -148,3 +148,21 @@ final class MockingbirdProcess: @unchecked Sendable {
         return stream
     }
 }
+
+extension MockingbirdProcess {
+    /// Writes all of `data` to stdin, then closes it. A write failure means the child closed
+    /// its stdin early (usually because it has already failed); that is not an error here —
+    /// the child's exit status says what went wrong.
+    func sendInput(_ data: Data) {
+        do {
+            try write(data)
+        } catch {
+            // Reported through the exit status instead.
+        }
+        do {
+            try closeStandardInput()
+        } catch {
+            // Already closed: nothing left to signal.
+        }
+    }
+}
