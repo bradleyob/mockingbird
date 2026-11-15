@@ -530,7 +530,7 @@ curl -s localhost:7742/health                                                   
 curl -s -X POST --data-binary @$T/cmajor.raw -H 'Content-Type: application/octet-stream' localhost:7742/analyze   # KeyResult, C major
 curl -s -X POST --data-binary @$T/cmajor.wav -H 'Content-Type: audio/wav' 'localhost:7742/analyze?alternates=1'  # one alternate
 curl -s -o /dev/null -w '%{http_code}\n' -X POST -H 'Content-Type: text/plain' -d x localhost:7742/analyze      # 415
-for i in 1 2 3 4 5 6; do curl -s -o /dev/null -w '%{http_code} ' -X POST --data-binary @$T/cmajor.raw localhost:7742/analyze & done; wait; echo   # six 200s
+for i in 1 2 3 4 5 6; do curl -s -o /dev/null -w '%{http_code} ' -X POST -H 'Content-Type: application/octet-stream' --data-binary @$T/cmajor.raw localhost:7742/analyze & done; wait; echo   # six 200s
 
 cat > $T/ws.py <<'EOF'
 import asyncio, sys, websockets
