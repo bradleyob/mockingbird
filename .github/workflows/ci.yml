@@ -44,8 +44,27 @@ jobs:
       - name: Build
         run: swift build
 
+      # Watchdog: if the run hangs, dump every thread of the test process before failing,
+      # so the log says what is blocked instead of only timing out.
       - name: Test
-        run: swift test
+        timeout-minutes: 15
+        run: |
+          swift test &
+          TEST_PID=$!
+          for _ in $(seq 1 60); do
+            kill -0 "$TEST_PID" 2>/dev/null || break
+            sleep 5
+          done
+          if kill -0 "$TEST_PID" 2>/dev/null; then
+            echo "::error::swift test still running after 5 minutes; dumping threads"
+            for pid in $(pgrep -f 'PackageTests|swiftpm-testing-helper|xctest'); do
+              echo "=== $pid: $(ps -o command= -p "$pid" | cut -c1-200)"
+              sudo lldb -p "$pid" --batch -o 'thread backtrace all' 2>&1 | head -n 600 || true
+            done
+            pkill -f 'PackageTests|swiftpm-testing-helper' || true
+            exit 1
+          fi
+          wait "$TEST_PID"
 
       - name: Bundle MockingBird.app
         run: ./scripts/bundle-app.sh
