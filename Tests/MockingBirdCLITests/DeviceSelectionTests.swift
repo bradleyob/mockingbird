@@ -13,8 +13,8 @@ import Testing
         #expect(Set(names).count == names.count)
     }
 
-    @Test func listDevicesPrintsTheSameNames() throws {
-        let run = try CLIInvocation.run(["--list-devices"])
+    @Test func listDevicesPrintsTheSameNames() async throws {
+        let run = try await CLIInvocation.run(["--list-devices"])
         #expect(run.status == 0)
         #expect(run.stderr.isEmpty)
         #expect(run.lines == AVFoundationSource.inputDeviceNames())
@@ -30,8 +30,8 @@ import Testing
         }
     }
 
-    @Test func unknownDeviceExitsOneNamingTheDevice() throws {
-        let run = try CLIInvocation.run(["--device", "no-such-device-xyz"])
+    @Test func unknownDeviceExitsOneNamingTheDevice() async throws {
+        let run = try await CLIInvocation.run(["--device", "no-such-device-xyz"])
         #expect(run.status == 1)
         #expect(run.stdout.isEmpty)
         #expect(run.stderr.hasPrefix("mockingbird: error:"))

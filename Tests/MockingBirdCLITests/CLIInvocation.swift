@@ -5,7 +5,7 @@ import MockingBirdTestSupport
 /// Runs the built `mockingbird` binary and captures what it did.
 ///
 /// stdin, stdout and stderr all go through temporary files, so large inputs or outputs
-/// can never deadlock on a full pipe.
+/// can never deadlock on a full pipe, and nothing blocks while the CLI runs.
 struct CLIInvocation {
     let status: Int32
     let stdout: String
@@ -20,7 +20,7 @@ struct CLIInvocation {
     }
 
     /// - Parameter stdin: bytes for stdin; `nil` connects `/dev/null`.
-    static func run(_ arguments: [String], stdin: Data? = nil) throws -> CLIInvocation {
+    static func run(_ arguments: [String], stdin: Data? = nil) async throws -> CLIInvocation {
         let scratch = FileManager.default.temporaryDirectory
             .appendingPathComponent("mockingbird-cli-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
@@ -40,8 +40,16 @@ struct CLIInvocation {
         process.standardInput = try FileHandle(forReadingFrom: inURL)
         process.standardOutput = try FileHandle(forWritingTo: outURL)
         process.standardError = try FileHandle(forWritingTo: errURL)
+        // Await exit through terminationHandler: waitUntilExit() would block a thread of
+        // the cooperative pool for the CLI's whole run, and on a 2-core CI runner a couple
+        // of those starve every other async test.
+        let (exited, exitContinuation) = AsyncStream<Void>.makeStream()
+        process.terminationHandler = { _ in
+            exitContinuation.yield()
+            exitContinuation.finish()
+        }
         try process.run()
-        process.waitUntilExit()
+        for await _ in exited {}
 
         return CLIInvocation(
             status: process.terminationStatus,

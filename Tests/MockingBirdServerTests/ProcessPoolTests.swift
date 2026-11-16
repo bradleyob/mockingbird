@@ -118,7 +118,7 @@ import Testing
     @Test func bodyThatThrowsStillReapsTheProcess() async throws {
         let fake = try FakeExecutable()
         defer { fake.remove() }
-        let sleeper = try fake.script("sleeper", "sleep 30")
+        let sleeper = try fake.script("sleeper", "sleep 600")
         let pool = ProcessPool(maxConnections: 1)
         struct Boom: Error {}
 
@@ -128,10 +128,10 @@ import Testing
                 throw Boom()
             }
         }
-        // The child would sleep 30 s; returning well before that proves it was killed and
-        // reaped. Not tighter: a full parallel Linux run starves the cooperative pool (14 s
-        // observed); alone this takes well under a second.
-        #expect(ContinuousClock.now - started < .seconds(25))
+        // The child would sleep 10 minutes; returning well before that proves it was killed
+        // and reaped. The bound is loose on purpose: a loaded CI runner can delay the task
+        // by tens of seconds, which says nothing about the pool.
+        #expect(ContinuousClock.now - started < .seconds(300))
         #expect(await pool.activeCount == 0)
     }
 }

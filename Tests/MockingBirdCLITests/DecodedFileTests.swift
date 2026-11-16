@@ -26,8 +26,8 @@ import Testing
         return output
     }
 
-    private func expectCMajorRoot(_ url: URL) throws {
-        let run = try CLIInvocation.run([url.path])
+    private func expectCMajorRoot(_ url: URL) async throws {
+        let run = try await CLIInvocation.run([url.path])
         #expect(run.status == 0, "stderr: \(run.stderr)")
         #expect(run.stderr.isEmpty)
         let results = try run.results()
@@ -35,10 +35,10 @@ import Testing
         #expect(results.first?.key == .c)
     }
 
-    @Test func wav() throws {
+    @Test func wav() async throws {
         let wav = try Self.cadenceWAV()
         defer { try? FileManager.default.removeItem(at: wav) }
-        try expectCMajorRoot(wav)
+        try await expectCMajorRoot(wav)
     }
 
     @Test(arguments: [
@@ -46,24 +46,24 @@ import Testing
         ("m4a", ["-f", "m4af", "-d", "aac"]),
         ("wav", ["-f", "WAVE", "-d", "LEI16", "-c", "2"]),
     ])
-    func convertedFormats(fileExtension: String, arguments: [String]) throws {
+    func convertedFormats(fileExtension: String, arguments: [String]) async throws {
         let wav = try Self.cadenceWAV()
         defer { try? FileManager.default.removeItem(at: wav) }
         let converted = try Self.afconvert(wav, fileExtension: fileExtension, arguments)
         defer { try? FileManager.default.removeItem(at: converted) }
-        try expectCMajorRoot(converted)
+        try await expectCMajorRoot(converted)
     }
 
-    @Test func lowerSampleRateIsResampled() throws {
+    @Test func lowerSampleRateIsResampled() async throws {
         let wav = try Self.cadenceWAV(sampleRate: 22050)
         defer { try? FileManager.default.removeItem(at: wav) }
-        try expectCMajorRoot(wav)
+        try await expectCMajorRoot(wav)
     }
 
-    @Test func undecodableFileExitsFour() throws {
+    @Test func undecodableFileExitsFour() async throws {
         let url = try AudioFixture.writeTemporary(Data("this is not audio\n".utf8), fileExtension: "wav")
         defer { try? FileManager.default.removeItem(at: url) }
-        let run = try CLIInvocation.run([url.path])
+        let run = try await CLIInvocation.run([url.path])
         #expect(run.status == 4)
         #expect(run.stdout.isEmpty)
         #expect(run.stderr.hasPrefix("mockingbird: error:"))

@@ -76,5 +76,11 @@ jobs:
       - name: Build
         run: swift build
 
-      - name: Test
-        run: swift test
+      # Two passes: Core's CPU-bound accuracy suites would otherwise queue ahead of the
+      # wall-clock-sensitive process and audio tests on the 2-core runner's small
+      # cooperative pool (observed 30-80 s stalls).
+      - name: Test (Core)
+        run: swift test --filter MockingBirdCoreTests
+
+      - name: Test (CLI, server, miniaudio)
+        run: swift test --skip MockingBirdCoreTests

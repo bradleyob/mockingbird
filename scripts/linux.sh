@@ -36,9 +36,18 @@ case "$command" in
     test)
         # BuiltProducts locates mockingbird next to the test bundle; point it at the
         # products directory explicitly as well, in case dladdr resolves elsewhere.
-        run -v "$root":/src -v "$volume":/build -w /src \
-            -e MOCKINGBIRD_BIN_DIR=/build/debug "$image" \
-            swift test --scratch-path /build "$@"
+        if [ $# -gt 0 ]; then
+            run -v "$root":/src -v "$volume":/build -w /src \
+                -e MOCKINGBIRD_BIN_DIR=/build/debug "$image" \
+                swift test --scratch-path /build "$@"
+        else
+            # Same two passes as CI: Core's CPU-bound suites run apart from the
+            # wall-clock-sensitive process and audio tests.
+            run -v "$root":/src -v "$volume":/build -w /src \
+                -e MOCKINGBIRD_BIN_DIR=/build/debug "$image" \
+                sh -c 'swift test --scratch-path /build --filter MockingBirdCoreTests &&
+                       swift test --scratch-path /build --skip MockingBirdCoreTests'
+        fi
         ;;
     shell)
         run -it -v "$root":/src -v "$volume":/build -w /src "$image" bash

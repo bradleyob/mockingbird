@@ -62,12 +62,15 @@ import Testing
     @Test func terminateStopsALongRunningProcess() async throws {
         let fake = try FakeExecutable()
         defer { fake.remove() }
-        let script = try fake.script("sleeper", "exec sleep 30")
+        // Long enough that it cannot exit on its own even if this test is starved for a
+        // while on a loaded runner; only the kill can end it.
+        let script = try fake.script("sleeper", "exec sleep 600")
 
         let process = try await MockingbirdProcess.launch(executable: script, arguments: [], standardInput: .pipe)
         process.terminate()
         let exit = await process.exit()
 
-        #expect(!exit.isSuccess)
+        #expect(exit.signalled)
+        #expect(exit.status == SIGKILL)
     }
 }
