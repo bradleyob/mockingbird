@@ -3,7 +3,12 @@ import Foundation
 /// Reads mono Float32 little-endian PCM from a file descriptor, one bounded chunk per call.
 ///
 /// Uses `read(2)` directly so a pipe delivers whatever is available instead of blocking
-/// until a full chunk arrives, which keeps live stdin input flowing. Bytes that do not
+/// until a full chunk arrives, which keeps live stdin input flowing. Before each read it
+/// `poll(2)`s the descriptor with a zero timeout and, if nothing is ready, suspends with
+/// `Task.sleep` rather than blocking: a blocking `read` would hold a thread of the
+/// cooperative pool, and a few readers waiting on pipes fed by other tasks can then
+/// deadlock the whole pool (seen on a 3-core CI runner). It also lets `stop()` and task
+/// cancellation take effect without waiting for more input. Bytes that do not
 /// complete a sample are carried into the next read, so odd-sized pipe writes never
 /// misalign later samples. A trailing partial sample at end of input is dropped.
 ///
@@ -38,11 +43,22 @@ final class PCMChunkReader: @unchecked Sendable {
         stopLock.withLock { stopped }
     }
 
+    /// How long to wait before polling again when no input is ready.
+    static let idleInterval = Duration.milliseconds(2)
+
     /// The next chunk of samples, or `nil` at end of input or after `stop()`.
     ///
     /// - Throws: `AudioSourceError.unknown` if the read fails.
-    func nextChunk() throws -> [Float]? {
+    func nextChunk() async throws -> [Float]? {
         while !isStopped && !Task.isCancelled {
+            guard try isReadable() else {
+                do {
+                    try await Task.sleep(for: Self.idleInterval)
+                } catch {
+                    return nil
+                }
+                continue
+            }
             let count = try readSome()
             guard count > 0 else { return nil }
             pending.append(contentsOf: readBuffer[0..<count])
@@ -60,6 +76,18 @@ final class PCMChunkReader: @unchecked Sendable {
             return samples
         }
         return nil
+    }
+
+    /// Whether a `read` would return without blocking: data, end of file, or an error.
+    private func isReadable() throws -> Bool {
+        var descriptor = pollfd(fd: handle.fileDescriptor, events: Int16(POLLIN), revents: 0)
+        while true {
+            let result = poll(&descriptor, 1, 0)
+            if result >= 0 { return result > 0 }
+            let code = errno
+            if code == EINTR { continue }
+            throw AudioSourceError.unknown("poll failed: \(String(cString: strerror(code)))")
+        }
     }
 
     /// Reads up to `chunkBytes - pending.count` bytes into `readBuffer`; 0 means end of input.

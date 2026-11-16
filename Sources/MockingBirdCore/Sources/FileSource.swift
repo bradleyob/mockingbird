@@ -28,7 +28,7 @@ public struct FileSource: AudioSource {
         }
         let reader = PCMChunkReader(handle: handle, chunkSamples: chunkSize)
         readers.replace(with: reader)
-        return AsyncThrowingStream { try reader.nextChunk() }
+        return AsyncThrowingStream { try await reader.nextChunk() }
     }
 
     /// Ends the stream at the next chunk boundary.

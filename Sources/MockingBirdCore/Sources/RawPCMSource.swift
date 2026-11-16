@@ -23,11 +23,10 @@ public struct RawPCMSource: AudioSource {
     public func start(sampleRate: Double) throws -> AsyncThrowingStream<[Float], Error> {
         let reader = PCMChunkReader(handle: handle, chunkSamples: chunkSize)
         readers.replace(with: reader)
-        return AsyncThrowingStream { try reader.nextChunk() }
+        return AsyncThrowingStream { try await reader.nextChunk() }
     }
 
-    /// Ends the stream. A read already blocked on the handle returns first; the stream
-    /// then finishes without delivering it.
+    /// Ends the stream; a reader waiting for input notices within a few milliseconds.
     public func stop() {
         readers.stopCurrent()
     }

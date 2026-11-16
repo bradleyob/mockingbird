@@ -49,7 +49,9 @@ jobs:
       - name: Test
         timeout-minutes: 15
         run: |
-          swift test &
+          # Two passes, as on Linux: Core's CPU-bound suites apart from the wall-clock-
+          # sensitive process and audio tests.
+          ( swift test --filter MockingBirdCoreTests && swift test --skip MockingBirdCoreTests ) &
           TEST_PID=$!
           for _ in $(seq 1 60); do
             kill -0 "$TEST_PID" 2>/dev/null || break
