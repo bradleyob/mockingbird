@@ -1,6 +1,10 @@
 import Foundation
 
-/// The result of a key detection pass over one analysis window.
+/// The result of one key detection pass, emitted once per hop by `AnalysisPipeline`.
+///
+/// Depending on the pipeline's `ChromaAggregation`, it reflects one window, every window
+/// so far, or a rolling span. Encodes (with `.sortedKeys`) as
+/// `{"alternates":[…],"category":"major","confidence":0.924,"key":"C","scaleName":"major","timestamp":3.99}`.
 public struct KeyResult: Equatable, Codable, Sendable {
     /// Detected root pitch class.
     public let key: PitchClass
@@ -8,11 +12,13 @@ public struct KeyResult: Equatable, Codable, Sendable {
     public let scaleName: String
     /// Broad scale category.
     public let category: ScaleCategory
-    /// Confidence score in [0, 1]. Higher is more certain.
+    /// Pearson correlation with the winning profile, clamped to [0, 1]. Tonal material
+    /// typically scores 0.8–0.95, white noise about 0.45, silence 0.
     public let confidence: Float
     /// Up to `AudioConfig.numAlternates` runner-up candidates, sorted by confidence descending.
     public let alternates: [KeyResult.Alternate]
-    /// Timestamp of the analysis window (seconds from stream start).
+    /// Seconds of audio consumed at the end of the analysed window:
+    /// `(windowIndex * hopSize + windowSize) / sampleRate`. Audio time, not wall-clock.
     public let timestamp: TimeInterval
 
     public init(

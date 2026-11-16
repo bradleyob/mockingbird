@@ -1,71 +1,56 @@
-# MockingBird build scripts
-# Requires: swift 6+, Xcode 16+ (macOS), or Swift toolchain (Linux)
+# MockingBird build tasks.
+# Requires Swift 6.2+ (the pinned swift-nio / swift-log need it). Xcode is optional:
+# on macOS the Command Line Tools are enough, because tests go through scripts/test.sh.
+# Linux targets need Docker (scripts/linux.sh runs the swift:6.2 image).
 
-.PHONY: build build-release test test-all clean lint help
+.DEFAULT_GOAL := help
+.PHONY: build build-release test test-core test-cli test-server test-miniaudio test-app \
+        linux-build linux-test app run-app deps clean help
 
-# ── Build ────────────────────────────────────────────────────────────────────
-
-## Build all targets (debug)
-build:
+build: ## Build every target (debug)
 	swift build
 
-## Build MockingBirdCore library only
-build-core:
-	swift build --target MockingBirdCore
-
-## Build the mockingbird CLI binary (debug)
-build-cli:
-	swift build --target MockingBirdCLI
-
-## Build the mockingbird-server binary (debug)
-build-server:
-	swift build --target MockingBirdServer
-
-## Build all targets in release mode
-build-release:
+build-release: ## Build every target (release)
 	swift build -c release
 
-## Build release CLI binary and print its path
-build-cli-release:
-	swift build -c release --target MockingBirdCLI
-	@echo "Binary: $$(swift build -c release --target MockingBirdCLI --show-bin-path)/mockingbird"
+test: ## Run all tests (Swift Testing, via scripts/test.sh)
+	./scripts/test.sh
 
-# ── Test ─────────────────────────────────────────────────────────────────────
+test-core: ## Run MockingBirdCore tests
+	./scripts/test.sh --filter MockingBirdCoreTests
 
-## Run MockingBirdCore unit + integration tests
-test:
-	swift test --filter MockingBirdCoreTests
+test-cli: ## Run mockingbird CLI tests
+	./scripts/test.sh --filter MockingBirdCLITests
 
-## Run all tests
-test-all:
-	swift test
+test-server: ## Run mockingbird-server tests
+	./scripts/test.sh --filter MockingBirdServerTests
 
-## Run tests with verbose output
-test-verbose:
-	swift test --filter MockingBirdCoreTests --verbose
+test-miniaudio: ## Run miniaudio source tests
+	./scripts/test.sh --filter MockingBirdMiniAudioTests
 
-# ── Maintenance ───────────────────────────────────────────────────────────────
+test-app: ## Run macOS app view-model tests
+	./scripts/test.sh --filter MockingBirdAppTests
 
-## Remove build artifacts
-clean:
-	swift package clean
-	rm -rf .build
+linux-build: ## Build on Linux in Docker (swift:6.2)
+	./scripts/linux.sh build
 
-## Resolve/update package dependencies
-deps:
+linux-test: ## Run tests on Linux in Docker (swift:6.2)
+	./scripts/linux.sh test
+
+app: ## Build the ad-hoc-signed build/MockingBird.app
+	./scripts/bundle-app.sh
+
+run-app: ## Open build/MockingBird.app (run `make app` first)
+	open build/MockingBird.app
+
+deps: ## Resolve package dependencies (honours Package.resolved)
 	swift package resolve
 
-## Update all dependencies to latest compatible versions
-deps-update:
-	swift package update
+clean: ## Remove .build/ and build/
+	swift package clean
+	rm -rf .build build
 
-# ── Help ─────────────────────────────────────────────────────────────────────
-
-## Print this help message
-help:
-	@echo "MockingBird — available targets:"
-	@echo ""
-	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/## /  /'
-	@echo ""
-	@grep -E '^[a-z][a-zA-Z_-]+:' $(MAKEFILE_LIST) | sed 's/:.*//' | \
-		awk '{printf "  make %-20s\n", $$1}'
+help: ## List targets
+	@echo "MockingBird make targets:"
+	@grep -E '^[a-z][a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | \
+		awk 'BEGIN { FS = ":.*## " } { printf "  make %-16s %s\n", $$1, $$2 }'

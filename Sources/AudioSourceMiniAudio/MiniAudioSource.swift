@@ -1,20 +1,82 @@
+import CMiniAudio
 import MockingBirdCore
 
-/// Stub: Linux/POSIX microphone capture via the vendored miniaudio C library.
+/// Microphone capture via the vendored miniaudio C library (Linux/POSIX; also builds on macOS).
 ///
-/// Full implementation will call `mb_device_init` / `mb_device_start` via the
-/// C bridge in `Sources/AudioSourceMiniAudio/miniaudio_bridge.c`.
-/// The data callback posts chunks to the stream continuation via a lock-free ring buffer
-/// pre-allocated at init so the callback path never allocates.
+/// Delivers mono Float32 at the requested rate. miniaudio's callback copies into a ring
+/// buffer in C; the stream pulls from it, sleeping briefly whenever it is empty. If the
+/// consumer falls more than `ringSeconds` behind, frames that do not fit are dropped by the callback
+/// rather than blocking the audio thread.
 public final class MiniAudioSource: AudioSource {
-    public init() {}
+    /// Samples per delivered chunk, at most.
+    static let chunkFrames = 4096
+    /// How long the stream sleeps when the ring buffer is empty.
+    static let pollInterval = Duration.milliseconds(10)
+    /// Ring buffer capacity.
+    static let ringSeconds = 2.0
 
-    public func start(sampleRate: Double) throws -> AsyncThrowingStream<[Float], Error> {
-        // TODO: MB-11 — implement miniaudio device init and real-time callback bridge
-        throw AudioSourceError.deviceUnavailable
+    private let deviceName: String?
+    private let backend: MiniAudioBackend
+    private let sessions = SessionRegistry()
+
+    /// - Parameter deviceName: Capture device to open, matched by name. `nil` or
+    ///   `"default"` selects the system default input.
+    public convenience init(deviceName: String? = nil) {
+        self.init(deviceName: deviceName, backend: .platformDefault)
     }
 
+    /// Selects the backend explicitly; tests use `.null` to run without hardware.
+    init(deviceName: String?, backend: MiniAudioBackend) {
+        self.deviceName = deviceName
+        self.backend = backend
+    }
+
+    /// Names of the capture devices miniaudio can see, in enumeration order.
+    public static func inputDeviceNames() throws -> [String] {
+        try inputDeviceNames(backend: .platformDefault)
+    }
+
+    static func inputDeviceNames(backend: MiniAudioBackend, capacity: Int = 64) throws(AudioSourceError) -> [String] {
+        let slot = Int(MB_DEVICE_NAME_CAPACITY)
+        var names = [CChar](repeating: 0, count: capacity * slot)
+        var count: UInt32 = 0
+        let result = mb_list_capture_devices(backend.bridgeValue, &names, UInt32(capacity), &count)
+        guard result == MB_SUCCESS else {
+            throw AudioSourceError.deviceUnavailable
+        }
+        return (0..<Int(count)).map { index in
+            let bytes = names[(index * slot)..<((index + 1) * slot)].prefix { $0 != 0 }
+            return String(decoding: bytes.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        }
+    }
+
+    /// Opens and starts the device, then streams its samples until `stop()`.
+    /// - Throws: `AudioSourceError.deviceUnavailable` for an unknown name or a device that
+    ///   cannot be opened.
+    public func start(sampleRate: Double) throws -> AsyncThrowingStream<[Float], Error> {
+        let session = try CaptureSession(
+            backend: backend, deviceName: deviceName, sampleRate: sampleRate, ringSeconds: Self.ringSeconds)
+        sessions.add(session)
+        return AsyncThrowingStream {
+            while true {
+                guard let chunk = try session.read(maxFrames: Self.chunkFrames) else {
+                    return nil
+                }
+                if !chunk.isEmpty {
+                    return chunk
+                }
+                do {
+                    try await Task.sleep(for: Self.pollInterval)
+                } catch {
+                    session.close()
+                    return nil
+                }
+            }
+        }
+    }
+
+    /// Stops the device; the stream finishes at its next pull.
     public func stop() {
-        // TODO: MB-11 — stop and destroy ma_device
+        sessions.closeAll()
     }
 }

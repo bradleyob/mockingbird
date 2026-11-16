@@ -6,34 +6,102 @@ on:
   pull_request:
     branches: ["**"]
 
-jobs:
-  build-and-test:
-    name: Build & Test (macOS)
-    runs-on: macos-15
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
+# Package.resolved pins swift-nio / swift-log releases that need Swift tools 6.2,
+# so both jobs require a Swift 6.2+ toolchain (Xcode 16.x ships 6.1 and cannot resolve).
+
+jobs:
+  macos:
+    name: Build & Test (macOS, Xcode 26)
+    runs-on: macos-26
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.3.app
+      - name: Select newest Xcode 26
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -n 1)
+          test -n "$XCODE" || { echo "::error::no Xcode 26 on this runner"; ls -d /Applications/Xcode*.app; exit 1; }
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
+
+      - name: Require Swift 6.2+
+        run: |
+          swift --version
+          V=$(swift --version 2>&1 | sed -nE 's/.*Swift version ([0-9]+\.[0-9]+).*/\1/p' | head -n 1)
+          LOWEST=$(printf '%s\n6.2\n' "$V" | sort -V | head -n 1)
+          test "$LOWEST" = "6.2" || { echo "::error::Swift $V is older than 6.2"; exit 1; }
+
+      - uses: actions/cache@v4
+        with:
+          path: .build
+          key: spm-macos-${{ hashFiles('Package.resolved') }}
+          restore-keys: spm-macos-
+
+      - name: Build
+        run: swift build
+
+      # Watchdog: if the run hangs, dump every thread of the test process before failing,
+      # so the log says what is blocked instead of only timing out.
+      - name: Test
+        timeout-minutes: 15
+        run: |
+          # Two passes, as on Linux: Core's CPU-bound suites apart from the wall-clock-
+          # sensitive process and audio tests.
+          ( swift test --filter MockingBirdCoreTests && swift test --skip MockingBirdCoreTests ) &
+          TEST_PID=$!
+          for _ in $(seq 1 60); do
+            kill -0 "$TEST_PID" 2>/dev/null || break
+            sleep 5
+          done
+          if kill -0 "$TEST_PID" 2>/dev/null; then
+            echo "::error::swift test still running after 5 minutes; dumping threads"
+            for pid in $(pgrep -f 'PackageTests|swiftpm-testing-helper|xctest'); do
+              echo "=== $pid: $(ps -o command= -p "$pid" | cut -c1-200)"
+              sudo lldb -p "$pid" --batch -o 'thread backtrace all' 2>&1 | head -n 600 || true
+            done
+            pkill -f 'PackageTests|swiftpm-testing-helper' || true
+            exit 1
+          fi
+          wait "$TEST_PID"
+
+      - name: Bundle MockingBird.app
+        run: ./scripts/bundle-app.sh
+
+      - name: Check bundle
+        run: |
+          plutil -lint build/MockingBird.app/Contents/Info.plist
+          codesign --verify --verbose build/MockingBird.app
+          /usr/libexec/PlistBuddy -c "Print :NSMicrophoneUsageDescription" build/MockingBird.app/Contents/Info.plist
+
+  linux:
+    name: Build & Test (Linux, swift:6.2)
+    runs-on: ubuntu-latest
+    container: swift:6.2
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Swift version
         run: swift --version
 
-      - name: Resolve dependencies
-        run: swift package resolve
+      - uses: actions/cache@v4
+        with:
+          path: .build
+          key: spm-linux-${{ hashFiles('Package.resolved') }}
+          restore-keys: spm-linux-
 
-      - name: Build MockingBirdCore
-        run: swift build --target MockingBirdCore
+      - name: Build
+        run: swift build
 
-      - name: Build mockingbird CLI
-        run: swift build --target MockingBirdCLI
-
-      - name: Build mockingbird-server
-        run: swift build --target MockingBirdServer
-
-      - name: Run tests
+      # Two passes: Core's CPU-bound accuracy suites would otherwise queue ahead of the
+      # wall-clock-sensitive process and audio tests on the 2-core runner's small
+      # cooperative pool (observed 30-80 s stalls).
+      - name: Test (Core)
         run: swift test --filter MockingBirdCoreTests
 
-      - name: Run CLI tests
-        run: swift test --filter MockingBirdCLITests
+      - name: Test (CLI, server, miniaudio)
+        run: swift test --skip MockingBirdCoreTests
